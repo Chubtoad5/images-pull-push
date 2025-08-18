@@ -1,5 +1,9 @@
 # images-pull-push
-Script to pull, push, and save container images dynamically
+Script to pull, push, and save container images dynamically using Docker
+- Recommened when needing to leverage a local OCI container registry instead of a public registry when no proxy/pull passthrough is enabled
+- Optionally saves tar.gz that contains an image manifest txt and a tarball of all pulled images
+- Great for airgapped environment preparation
+- Easily integrate with existing automation
 
 ## Getting started
 
