@@ -19,12 +19,13 @@ Script to pull, push, and save container images dynamically using Docker
 ```
 git clone https://github.com/Chubtoad5/images-pull-push.git
 ```
-- A txt file containing the container images and tags, i.e: `image-manifest.txt`
+- A txt file in the same directory containing the container images and tags, i.e: `image-manifest.txt`
 ```
 nginx:latest
 rancher/local-path-provisioner:v0.0.31
 registry.k8s.io/e2e-test-images/agnhost:2.39
 ```
+- If pushing from a pre-created tar.gz, the ``` container_images_####.tar.gz ``` fine in the same directory
 
 ##  Usage
 ```
