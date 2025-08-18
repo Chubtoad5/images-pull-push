@@ -25,7 +25,7 @@ nginx:latest
 rancher/local-path-provisioner:v0.0.31
 registry.k8s.io/e2e-test-images/agnhost:2.39
 ```
-- If pushing from a pre-created tar.gz, the ``` container_images_####.tar.gz ``` fine in the same directory
+- If pushing from a pre-created tar.gz, the ``` container_images_####.tar.gz ``` file in the same directory
 
 ##  Usage
 ```
