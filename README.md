@@ -4,10 +4,11 @@ Script to pull, push, and save container images dynamically
 ## Getting started
 
 ### Requirements
-Supported Operating Systems:  ```ubuntu|debian|rhel|centos|rocky|almalinux|fedora|sles|opensuse-leap```
-Docker engine and CLI
-Openssl
-the images_pull_push.sh script downloaded, i.e:
+- Supported Operating Systems:  ```ubuntu|debian|rhel|centos|rocky|almalinux|fedora|sles|opensuse-leap```
+- Docker engine and CLI
+- Openssl
+- Sudo or root access
+- The images_pull_push.sh script downloaded, i.e:
 ```
 git clone https://github.com/Chubtoad5/images-pull-push.git
 ```
