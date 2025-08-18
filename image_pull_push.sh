@@ -23,7 +23,7 @@ TEMP_DIR=""
 # Function to display a usage message
 usage() {
     cat << EOF
-Usage: sudo $SCRIPT_NAME -f <path_to_images_file> [<save>] [<push> <registry:port> [<username> <password>]]
+Usage: sudo images_pull_push.sh -f <path_to_images_file> [save] [push <registry:port> [<username> <password>]]
 
 This script must be run with root privileges.
 
