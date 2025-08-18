@@ -37,4 +37,3 @@ sudo ./images_pull_push.sh -f my_images.txt save push my-registry.com:5000 <user
 ```
 sudo ./images_pull_push.sh -f container_images_...tar.gz push my-registry.com:5000 <username> <password>
 ```
-
