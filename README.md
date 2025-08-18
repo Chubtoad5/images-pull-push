@@ -2,6 +2,7 @@
 Script to pull, push, and save container images dynamically using Docker
 - Recommened when needing to leverage a local OCI container registry instead of a public registry when no proxy/pull passthrough is enabled
 - Optionally saves tar.gz that contains an image manifest txt and a tarball of all pulled images
+- Automatically preserves original tagging and dynamicaly updates the tags when pushing to the registry
 - Great for airgapped environment preparation
 - Easily integrate with existing automation
 
@@ -12,6 +13,8 @@ Script to pull, push, and save container images dynamically using Docker
 - Docker engine and CLI
 - Openssl
 - Sudo or root access
+- Access to an existing container registry when using push
+- Container registry must have the coresponding project path(s) pre-created (i.e /rancher, /library, /longhornio, etc.)
 - The images_pull_push.sh script downloaded, i.e:
 ```
 git clone https://github.com/Chubtoad5/images-pull-push.git
