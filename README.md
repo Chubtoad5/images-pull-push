@@ -2,7 +2,10 @@
 Script to pull, push, and save container images dynamically
 
 ## Getting started
-```git clone https://github.com/Chubtoad5/images-pull-push.git```
+```
+git clone https://github.com/Chubtoad5/images-pull-push.git
+
+```
 
 ##  Usage
 ```
@@ -22,11 +25,17 @@ Parameters:
 
 ## Examples
 ### Pull and save images:
-```sudo ./images_pull_push.sh -f my_images.txt save```
+```
+sudo ./images_pull_push.sh -f my_images.txt save
+```
 
 ### Pull, save, and push to a registry:
-```sudo ./images_pull_push.sh -f my_images.txt save push my-registry.com:5000 <username> <password>```
+```
+sudo ./images_pull_push.sh -f my_images.txt save push my-registry.com:5000 <username> <password>
+```
 
 ### Load images from a local file and push (air-gapped):
-```sudo ./images_pull_push.sh -f container_images_...tar.gz push my-registry.com:5000 <username> <password>```
+```
+sudo ./images_pull_push.sh -f container_images_...tar.gz push my-registry.com:5000 <username> <password>
+```
 
