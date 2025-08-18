@@ -2,12 +2,18 @@
 Script to pull, push, and save container images dynamically
 
 ## Getting started
+
+### Requirements
+Supported Operating Systems:  ```ubuntu|debian|rhel|centos|rocky|almalinux|fedora|sles|opensuse-leap```
+Docker engine and CLI
+Openssl
+the images_pull_push.sh script downloaded, i.e:
 ```
 git clone https://github.com/Chubtoad5/images-pull-push.git
 ```
 
 ##  Usage
-```
+
 Usage: sudo images_pull_push.sh -f <path_to_images_file> [<save>] [<push> <registry:port> [<username> <password>]]
 
 This script must be run with root privileges.
@@ -20,7 +26,6 @@ Parameters:
   <registry:port>            : Required when <push> is specified. The target registry URL and port.
   <username>                 : Optional. The username for the registry.
   <password>                 : Optional. Required when <username> is specified. The password for the registry.
-```
 
 ## Examples
 ### Pull and save images:
