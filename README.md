@@ -3,6 +3,7 @@ Script to pull, push, and save container images dynamically using Docker
 - Recommened when needing to leverage a local OCI container registry instead of a public registry when no proxy/pull passthrough is enabled
 - Optionally saves tar.gz that contains an image manifest txt and a tarball of all pulled images
 - Automatically preserves original tagging and dynamicaly updates the tags when pushing to the registry
+- Specify to keep the images loaded in the docker daemon or remove them (useful for Kubernetes environments)
 - Great for airgapped environment preparation
 - Easily integrate with existing automation
 
@@ -19,13 +20,13 @@ Script to pull, push, and save container images dynamically using Docker
 ```
 git clone https://github.com/Chubtoad5/images-pull-push.git
 ```
-- A txt file in the same directory containing the container images and tags, i.e: `image-manifest.txt`
+- A txt file on the localhost of the container images and tags, i.e: `image-manifest.txt`
 ```
 nginx:latest
 rancher/local-path-provisioner:v0.0.31
 registry.k8s.io/e2e-test-images/agnhost:2.39
 ```
-- If pushing from a pre-created tar.gz, the ``` container_images_####.tar.gz ``` file in the same directory
+- If loading or pushing from a pre-created tar.gz, the ``` container_images_####.tar.gz ``` file downloaded locally
 
 ##  Usage
 ```
