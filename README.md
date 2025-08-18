@@ -4,7 +4,6 @@ Script to pull, push, and save container images dynamically
 ## Getting started
 ```
 git clone https://github.com/Chubtoad5/images-pull-push.git
-
 ```
 
 ##  Usage
