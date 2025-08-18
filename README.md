@@ -29,13 +29,14 @@ registry.k8s.io/e2e-test-images/agnhost:2.39
 
 ##  Usage
 ```
-Usage: sudo images_pull_push.sh -f <path_to_images_file> [save] [push <registry:port> [<username> <password>]]
+Usage: ./images_pull_push.sh -f <path_to_images_or_manifest_file> [keep] [save] [push <registry:port> [<username> <password>]]
 
 This script must be run with root privileges.
 
 Parameters:
   -f <path_to_images_file>   : Path to the file containing a list of container images and tags (one per line).
                                Alternatively, this can be a .tar.gz file created by this script for air-gapped mode.
+  <keep>                     : Optional. If specified, the script will NOT delete the images from the local Docker daemon at the end.
   <save>                     : Optional. If specified, saves the images to a .tar.gz file.
   <push>                     : Optional. Pushes the images to a specified registry after saving.
   <registry:port>            : Required when <push> is specified. The target registry URL and port.
@@ -46,15 +47,20 @@ Parameters:
 ## Examples
 ### Pull and save images:
 ```
-sudo ./images_pull_push.sh -f my_images.txt save
+./images_pull_push.sh -f my_images.txt save
 ```
 
 ### Pull, save, and push to a registry:
 ```
-sudo ./images_pull_push.sh -f my_images.txt save push my-registry.com:5000 <username> <password>
+./images_pull_push.sh -f my_images.txt save push my-registry.com:5000 <username> <password>
 ```
 
 ### Load images from a local file and push (air-gapped):
 ```
-sudo ./images_pull_push.sh -f container_images_...tar.gz push my-registry.com:5000 <username> <password>
+./images_pull_push.sh -f container_images_...tar.gz push my-registry.com:5000 <username> <password>
+```
+
+### Load image freom a local file and keep them without pushing
+```
+./$SCRIPT_NAME -f container_images_...tar.gz keep
 ```

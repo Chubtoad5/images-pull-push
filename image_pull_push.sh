@@ -11,6 +11,7 @@ SCRIPT_NAME=$(basename "$0")
 IMAGES_FILE=""
 SAVE_MODE=0
 PUSH_MODE=0
+KEEP_MODE=0
 AIR_GAPPED_MODE=0
 REGISTRY_URL=""
 REGISTRY_USER=""
@@ -23,13 +24,14 @@ TEMP_DIR=""
 # Function to display a usage message
 usage() {
     cat << EOF
-Usage: sudo images_pull_push.sh -f <path_to_images_file> [save] [push <registry:port> [<username> <password>]]
+Usage: $SCRIPT_NAME -f <path_to_images_or_manifest_file> [keep] [save] [push <registry:port> [<username> <password>]]
 
 This script must be run with root privileges.
 
 Parameters:
   -f <path_to_images_file>   : Path to the file containing a list of container images and tags (one per line).
                                Alternatively, this can be a .tar.gz file created by this script for air-gapped mode.
+  <keep>                     : Optional. If specified, the script will NOT delete the images from the local Docker daemon at the end.
   <save>                     : Optional. If specified, saves the images to a .tar.gz file.
   <push>                     : Optional. Pushes the images to a specified registry after saving.
   <registry:port>            : Required when <push> is specified. The target registry URL and port.
@@ -45,6 +47,9 @@ Example:
 
   Load images from a local file and push (air-gapped):
   sudo ./$SCRIPT_NAME -f container_images_...tar.gz push my-registry.com:5000
+
+  Load images from a local file and keep them without pushing:
+  sudo ./$SCRIPT_NAME -f container_images_...tar.gz keep
 EOF
     exit 1
 }
@@ -187,6 +192,10 @@ while [[ $# -gt 0 ]]; do
             shift # Skip the -f flag
             shift # Skip the file path
             ;;
+        keep)
+            KEEP_MODE=1
+            shift
+            ;;
         save)
             SAVE_MODE=1
             shift
@@ -262,7 +271,7 @@ if [[ "$IMAGES_FILE" =~ \.tar\.gz$ ]]; then
     fi
 
     echo "Loading images from '$TAR_IMAGE_FILE_IN_ARCHIVE'..."
-    if ! docker load -q -i "$TAR_IMAGE_FILE_IN_ARCHIVE"; then
+    if ! docker load -i "$TAR_IMAGE_FILE_IN_ARCHIVE"; then
         echo "Error: Failed to load images from the tar archive."
         exit 1
     fi
@@ -278,7 +287,7 @@ if [[ "$IMAGES_FILE" =~ \.tar\.gz$ ]]; then
     fi
     
 # --- If not air-gapped, proceed with normal pull/save/push flow ---
-elif [[ $SAVE_MODE -eq 1 || $PUSH_MODE -eq 1 ]]; then
+elif [[ $SAVE_MODE -eq 1 || $PUSH_MODE -eq 1 || $KEEP_MODE -eq 1 ]]; then
 
     # Get images from the provided images list file
     readarray -t images_to_manage < <(grep -vE '^\s*#|^\s*$' "$IMAGES_FILE")
@@ -290,7 +299,7 @@ elif [[ $SAVE_MODE -eq 1 || $PUSH_MODE -eq 1 ]]; then
         echo "Pulling image: $image"
         
         # Attempt to pull from the original source
-        if docker pull -q "$image"; then
+        if docker pull -q"$image"; then
             echo "Successfully pulled from original source."
             pull_successful=true
         else
@@ -364,7 +373,7 @@ elif [[ $SAVE_MODE -eq 1 || $PUSH_MODE -eq 1 ]]; then
     fi
 else
     # Catch all for invalid parameters
-    echo "Error: No mode specified. Use 'save' or 'push'."
+    echo "Error: No mode specified. Use 'keep', 'save' or 'push'."
     usage
 fi
 
@@ -416,7 +425,11 @@ if [[ $PUSH_MODE -eq 1 ]]; then
         
         # Clean up the new tag
         echo "Push successful. Removing temporary tag '$new_tag'..."
-        docker rmi "$new_tag" &> /dev/null
+        if ! docker rmi "$new_tag" &> /dev/null; then
+            # The removal of the tag failed, but it's not a critical error for the overall script.
+            # We can print a warning but allow the script to continue.
+            echo "Warning: Failed to remove temporary tag '$new_tag'."
+        fi
     done
     
     if [[ ${#failed_pushes[@]} -gt 0 ]]; then
@@ -430,13 +443,27 @@ if [[ $PUSH_MODE -eq 1 ]]; then
     echo "--- All images pushed successfully ---"
 fi
 
-# Delete local images only if push was successful and requested
-if [[ $PUSH_MODE -eq 1 ]] && [[ ${#images_to_manage[@]} -gt 0 ]] && [[ ${#failed_pushes[@]} -eq 0 ]]; then
+# Delete local images only if push was successful AND keep was NOT specified
+if [[ $PUSH_MODE -eq 1 ]] && [[ ${#images_to_manage[@]} -gt 0 ]] && [[ ${#failed_pushes[@]} -eq 0 ]] && [[ $KEEP_MODE -eq 0 ]]; then
     echo "--- Deleting local images that were pulled and pushed ---"
     if ! docker rmi "${images_to_manage[@]}" &> /dev/null; then
         echo "Warning: Could not delete all local images. Some may still exist."
     else
         echo "Successfully deleted local images."
+    fi
+fi
+
+# If we are in air-gapped mode AND keep was NOT specified, delete the loaded images
+if [[ $AIR_GAPPED_MODE -eq 1 ]] && [[ $KEEP_MODE -eq 0 ]]; then
+    # We only want to delete the images if we didn't also push them
+    # as the push block handles cleanup of its temporary tags
+    if [[ $PUSH_MODE -eq 0 ]]; then
+        echo "--- Deleting local images that were loaded from the archive ---"
+        if ! docker rmi "${images_to_manage[@]}" &> /dev/null; then
+            echo "Warning: Could not delete all local images. Some may still exist."
+        else
+            echo "Successfully deleted local images."
+        fi
     fi
 fi
 
