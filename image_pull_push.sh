@@ -262,7 +262,7 @@ if [[ "$IMAGES_FILE" =~ \.tar\.gz$ ]]; then
     fi
     
     # Find the images.tar and the original manifest file
-    TAR_IMAGE_FILE_IN_ARCHIVE="$TEMP_DIR/images.tar"
+    TAR_IMAGE_FILE_IN_ARCHIVE="$TEMP_DIR/images.tar.gz"
     MANIFEST_FILE_IN_ARCHIVE=$(find "$TEMP_DIR" -type f -name "*.txt")
     
     if [[ ! -f "$TAR_IMAGE_FILE_IN_ARCHIVE" || ! -f "$MANIFEST_FILE_IN_ARCHIVE" ]]; then
@@ -299,7 +299,7 @@ elif [[ $SAVE_MODE -eq 1 || $PUSH_MODE -eq 1 || $KEEP_MODE -eq 1 ]]; then
         echo "Pulling image: $image"
         
         # Attempt to pull from the original source
-        if docker pull -q"$image"; then
+        if docker pull -q "$image"; then
             echo "Successfully pulled from original source."
             pull_successful=true
         else
@@ -344,32 +344,29 @@ elif [[ $SAVE_MODE -eq 1 || $PUSH_MODE -eq 1 || $KEEP_MODE -eq 1 ]]; then
     if [[ $SAVE_MODE -eq 1 ]]; then
         echo "--- Starting image save process ---"
         SAVE_FILE_NAME="container_images_$(date +%Y%m%d_%H%M%S).tar.gz"
-        TAR_IMAGES_FILE="$TEMP_DIR/images.tar"
         
-        # Save all images into a single tar file
-        echo "Saving images to '$TAR_IMAGES_FILE'..."
-        if ! docker save "${images_to_manage[@]}" -o "$TAR_IMAGES_FILE"; then
-            echo "Error: Failed to save images to a tar file."
-            exit 1
-        fi
+        # Create a compressed tarball of the images directly from docker save stream
+        echo "Saving and compressing images..."
+        docker save "${images_to_manage[@]}" | gzip > "$TEMP_DIR/images.tar.gz"
         
-        # Copy the images file to the temporary directory so tar can find it
-        echo "Copying images list file to temporary directory..."
-        if ! cp "$IMAGES_FILE" "$TEMP_DIR/"; then
-            echo "Error: Failed to copy the images file to the temp directory."
+        if [[ $? -ne 0 ]]; then
+            echo "Error: Failed to save or compress images to a tar.gz file."
             exit 1
         fi
 
-        # Compress the tar file and the original images file, now both in the temp dir
-        echo "Compressing '$TAR_IMAGES_FILE' and '$IMAGES_FILE' into a single tar.gz file..."
-        tar -czf "$SAVE_FILE_NAME" -C "$TEMP_DIR" "$(basename "$TAR_IMAGES_FILE")" "$(basename "$IMAGES_FILE")"
+        # Copy the original images list file to the temporary directory
+        cp "$IMAGES_FILE" "$TEMP_DIR/manifest.txt"
         
-        if [[ $? -eq 0 ]]; then
-            echo "Images and manifest saved to '$SAVE_FILE_NAME'."
-        else
+        # Combine the compressed images tarball and the manifest into the final deliverable
+        echo "Combining compressed images and manifest into final archive '$SAVE_FILE_NAME'..."
+        tar -czf "$SAVE_FILE_NAME" -C "$TEMP_DIR" "images.tar.gz" "manifest.txt"
+        
+        if [[ $? -ne 0 ]]; then
             echo "Error: Failed to create the final tar.gz archive."
             exit 1
         fi
+
+        echo "Images and manifest saved to '$SAVE_FILE_NAME'."
     fi
 else
     # Catch all for invalid parameters
