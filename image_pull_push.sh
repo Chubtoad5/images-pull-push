@@ -17,7 +17,10 @@ REGISTRY_URL=""
 REGISTRY_USER=""
 REGISTRY_PASS=""
 CLEANUP_REQUIRED=0
+INSTALL_DOCKER=0
+ADD_REG_CERT=0
 TEMP_DIR=""
+user_name=$SUDO_USER
 
 # --- Helper Functions ---
 
@@ -73,17 +76,24 @@ validate_prerequisites() {
     echo "--- Performing prerequisite checks ---"
     # Check for Docker
     if ! command -v docker &> /dev/null; then
-        echo "Error: Docker CLI is not installed. Please install it."
-        exit 1
+        echo "Warning: Docker CLI is not installed. Script will attempt to install it."
+        INSTALL_DOCKER=1
     fi
     echo "Docker CLI found."
-
+    if [[ $INSTALL_DOCKER -eq 1 ]]; then
+        install_docker
+    fi
     # Check for OpenSSL
     if ! command -v openssl &> /dev/null; then
         echo "Error: openssl is not installed. Please install it with your system's package manager."
         exit 1
     fi
     echo "OpenSSL found."
+    # Check if docker can login
+    if [[ PUSH_MODE -eq 1 ]]; then
+        install_registry_cert
+    fi
+    # if cannot login, grab certificate
     echo "--- Prerequisite checks complete ---"
 }
 
@@ -100,10 +110,20 @@ validate_images_file() {
     echo "Images file '$IMAGES_FILE' is valid."
 }
 
+install_docker() {
+    curl -fsSL https://get.docker.com | sh -s --
+    usermod -aG docker $user_name
+    if ! command -v docker &> /dev/null; then
+        echo "Error: Docker installation failed."
+        exit 1
+    fi
+}
+
 # Function to get and install the registry certificate based on OS
 install_registry_cert() {
-    local registry_hostname=$(echo "$1" | cut -d':' -f1)
-    local registry_port=$(echo "$1" | cut -d':' -f2)
+    echo "Registry URL is $REGISTRY_URL"
+    local registry_hostname=$(echo "$REGISTRY_URL" | cut -d':' -f1)
+    local registry_port=$(echo "$REGISTRY_URL" | cut -d':' -f2)
     local cert_path=""
     local update_cmd=""
     local os_id=""
@@ -244,6 +264,9 @@ if [[ $PUSH_MODE -eq 1 ]]; then
     fi
 fi
 
+# Run preflight checks
+validate_prerequisites
+
 # Validate the images file
 validate_images_file
 
@@ -383,7 +406,7 @@ if [[ $PUSH_MODE -eq 1 ]]; then
         echo "Error: No images found to push. Check your input file or manifest."
         exit 1
     fi
-
+    login_to_registry
     failed_pushes=()
     for image in "${images_to_manage[@]}"; do
         image_path_and_tag=""
