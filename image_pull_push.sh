@@ -22,6 +22,8 @@ ADD_REG_CERT=0
 TEMP_DIR=""
 user_name=$SUDO_USER
 DOCKER_BRIDGE_CIDR=172.30.0.1/16
+OFFLINE_PACKAGES=(docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin)
+os_id=""
 
 # --- Helper Functions ---
 
@@ -75,6 +77,15 @@ trap cleanup EXIT
 # Function to perform validation checks
 validate_prerequisites() {
     echo "--- Performing prerequisite checks ---"
+    if [[ "$IMAGES_FILE" =~ \.tar\.gz$ ]]; then
+      AIR_GAPPED_MODE=1
+      echo "--- Air-gapped mode detected ---"
+      echo "Extracting '$IMAGES_FILE'..."
+      if ! tar -xzf "$IMAGES_FILE" -C "$TEMP_DIR"; then
+        echo "Error: Failed to extract the .tar.gz archive. Please ensure it is a valid tar.gz file."
+        exit 1
+      fi
+    fi
     # Check for Docker
     if ! command -v docker &> /dev/null; then
         echo "Warning: Docker CLI is not installed. Script will attempt to install it."
@@ -110,6 +121,19 @@ validate_images_file() {
     echo "Images file '$IMAGES_FILE' is valid."
 }
 
+os_type() {
+    # Get OS information from /etc/os-release
+    if [[ -f /etc/os-release ]]; then
+        # shellcheck disable=SC1091
+        source /etc/os-release
+        echo "OS type is: $ID"
+        os_id="$ID"
+    else
+        echo "Unknown or unsupported OS $os_id."
+        exit 1
+    fi
+}
+
 create_bridge_json () {
   echo "pre-creating docker bridge json..."
   mkdir -p /etc/docker
@@ -121,15 +145,114 @@ EOF
   echo "Created /etc/docker/daemon.json with bip: $DOCKER_BRIDGE_CIDR"
 }
 
-
 install_docker() {
     create_bridge_json
-    curl -fsSL https://get.docker.com | sh -s --
-    usermod -aG docker $user_name
+    # check for airgapped and different OS version installs
+    if [[ $AIR_GAPPED_MODE -eq 1 ]]; then
+        echo "installing Docker from offline packages..."
+        local_repo_dir="$TEMP_DIR/offline-docker-packages"
+        case "$os_id" in
+            ubuntu|debian)
+                # offline install
+                ;;
+            rhel|centos|rocky|almalinux|fedora)
+                # offline install for RHEL based
+                cat <<EOF | sudo tee /etc/yum.repos.d/rke2-offline.repo
+[docker-offline-repo]
+name=Docker Offline Repository
+baseurl=file://$local_repo_dir
+enabled=1
+gpgcheck=0
+EOF
+                dnf clean all
+                dnf --disablerepo="*" --enablerepo="docker-offline-repo" install "${OFFLINE_PACKAGES[@]}"
+                ;;
+            sles|opensuse-leap)
+                # offline install
+                ;;
+            *)
+                echo "Error: Unsupported OS '$os_id'. Manual install of Docker required."
+                exit 1
+                ;;
+        esac
+    else   
+        curl -fsSL https://get.docker.com | sh -s --
+        usermod -aG docker $user_name
+    fi
     if ! command -v docker &> /dev/null; then
         echo "Error: Docker installation failed."
         exit 1
     fi
+}
+
+save_docker_packages() {
+    echo "Saving offline Docker package for $os_id..."
+    DOWNLOAD_DIR="$TEMP_DIR/offline-docker-packages"
+    local base_dir=$(pwd)
+
+    case "$os_id" in
+        ubuntu|debian)
+            mkdir -p "$DOWNLOAD_DIR"
+            echo "installing dpkg-dev..."
+            # Using sudo and -y -qq for non-interactive installation
+            sudo DEBIAN_FRONTEND=noninteractive apt-get -y -qq install dpkg-dev
+
+            echo "Downloading ${OFFLINE_PACKAGES[*]}..."
+            cd "$DOWNLOAD_DIR"
+            # Get the full list of packages, including dependencies.
+            # Add a check to ensure the list is not empty
+            local packages_to_download=$(sudo apt-cache depends --recurse --no-recommends --no-suggests --no-conflicts --no-breaks --no-replaces --no-enhances --no-pre-depends "${OFFLINE_PACKAGES[@]}" | grep "^\w")
+            
+            if [[ -z "$packages_to_download" ]]; then
+                echo "Error: Failed to resolve dependencies for Docker packages. Aborting." >&2
+                cd "$base_dir"
+                return 1
+            fi
+            
+            sudo apt-get download $packages_to_download
+            sudo dpkg-scanpackages -m . > Packages
+            cd "$base_dir"
+            echo "Completed creating Docker repository metadata for $os_id."
+            ;;
+
+        rhel|centos|rocky|almalinux|fedora)
+            mkdir -p "$DOWNLOAD_DIR"
+            echo "installing dnf-utils and createrepo_c..."
+            # Use sudo and -y for non-interactive installation
+            sudo dnf install -y dnf-utils createrepo_c
+
+            echo "Downloading ${OFFLINE_PACKAGES[*]}..."
+            sudo dnf download --resolve --downloaddir="$DOWNLOAD_DIR" "${OFFLINE_PACKAGES[@]}"
+            sudo createrepo_c "$DOWNLOAD_DIR"
+            echo "Completed creating Docker repository metadata for $os_id."
+            ;;
+
+        sles|opensuse-leap)
+            mkdir -p "$DOWNLOAD_DIR"
+            echo "installing createrepo_c..."
+            # Correcting the package manager from dnf to zypper
+            sudo zypper install -y createrepo_c
+
+            # Clean up cache before downloading to avoid conflicts
+            echo "Cleaning Zypper cache..."
+            sudo rm -rf /var/cache/zypp/packages/*
+
+            echo "Downloading ${OFFLINE_PACKAGES[*]}..."
+            sudo zypper install --download-only "${OFFLINE_PACKAGES[@]}"
+            
+            # Use find with -exec to handle any directory structure issues in the cache
+            # This is more robust than a simple `cp`.
+            find /var/cache/zypp/packages/ -name "*.rpm" -exec sudo cp {} "$DOWNLOAD_DIR" \;
+
+            sudo createrepo_c "$DOWNLOAD_DIR"
+            echo "Completed creating Docker repository metadata for $os_id."
+            ;;
+
+        *)
+            echo "Error: Unsupported OS '$os_id'. Manual download of Docker binaries may be required for air-gapped mode." >&2
+            return 1
+            ;;
+    esac
 }
 
 # Function to get and install the registry certificate based on OS
@@ -139,17 +262,6 @@ install_registry_cert() {
     local registry_port=$(echo "$REGISTRY_URL" | cut -d':' -f2)
     local cert_path=""
     local update_cmd=""
-    local os_id=""
-
-    # Get OS information from /etc/os-release
-    if [[ -f /etc/os-release ]]; then
-        # shellcheck disable=SC1091
-        source /etc/os-release
-        os_id="$ID"
-    else
-        echo "Error: Could not determine OS from /etc/os-release."
-        exit 1
-    fi
 
     # Determine the correct certificate path and update command based on OS family
     case "$os_id" in
@@ -207,6 +319,9 @@ if [[ $EUID -ne 0 ]]; then
     echo "Error: This script must be run with sudo or as root."
     usage
 fi
+
+# Grab OS type
+os_type
 
 # Create a temporary directory for intermediate files
 TEMP_DIR=$(mktemp -d -t docker-pull-push-XXXXXXXX)
@@ -287,16 +402,10 @@ validate_images_file
 declare -a images_to_manage
 
 # --- Check if air-gapped mode is active ---
-if [[ "$IMAGES_FILE" =~ \.tar\.gz$ ]]; then
-    AIR_GAPPED_MODE=1
-    echo "--- Air-gapped mode detected ---"
+if [[ $AIR_GAPPED_MODE -eq 1 ]]; then
     
-    echo "Extracting '$IMAGES_FILE'..."
-    if ! tar -xzf "$IMAGES_FILE" -C "$TEMP_DIR"; then
-        echo "Error: Failed to extract the .tar.gz archive. Please ensure it is a valid tar.gz file."
-        exit 1
-    fi
-    
+    echo "--- Handling container images in Air-gapped mode ---"
+        
     # Find the images.tar and the original manifest file
     TAR_IMAGE_FILE_IN_ARCHIVE="$TEMP_DIR/images.tar.gz"
     MANIFEST_FILE_IN_ARCHIVE=$(find "$TEMP_DIR" -type f -name "*.txt")
@@ -381,6 +490,8 @@ elif [[ $SAVE_MODE -eq 1 || $PUSH_MODE -eq 1 || $KEEP_MODE -eq 1 ]]; then
         echo "--- Starting image save process ---"
         SAVE_FILE_NAME="container_images_$(date +%Y%m%d_%H%M%S).tar.gz"
         
+        # Create docker offline packages
+        save_docker_packages
         # Create a compressed tarball of the images directly from docker save stream
         echo "Saving and compressing images..."
         docker save "${images_to_manage[@]}" | gzip > "$TEMP_DIR/images.tar.gz"
@@ -395,8 +506,12 @@ elif [[ $SAVE_MODE -eq 1 || $PUSH_MODE -eq 1 || $KEEP_MODE -eq 1 ]]; then
         
         # Combine the compressed images tarball and the manifest into the final deliverable
         echo "Combining compressed images and manifest into final archive '$SAVE_FILE_NAME'..."
-        tar -czf "$SAVE_FILE_NAME" -C "$TEMP_DIR" "images.tar.gz" "manifest.txt"
-        
+        if [[ -d "$DOWNLOAD_DIR" ]]; then
+          tar -czf "$SAVE_FILE_NAME" -C "$TEMP_DIR" "images.tar.gz" "manifest.txt" "offline-docker-packages"
+        else
+          tar -czf "$SAVE_FILE_NAME" -C "$TEMP_DIR" "images.tar.gz" "manifest.txt"
+        fi
+
         if [[ $? -ne 0 ]]; then
             echo "Error: Failed to create the final tar.gz archive."
             exit 1
