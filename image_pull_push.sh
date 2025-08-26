@@ -21,6 +21,7 @@ INSTALL_DOCKER=0
 ADD_REG_CERT=0
 TEMP_DIR=""
 user_name=$SUDO_USER
+DOCKER_BRIDGE_CIDR=172.30.0.1/16
 
 # --- Helper Functions ---
 
@@ -89,11 +90,10 @@ validate_prerequisites() {
         exit 1
     fi
     echo "OpenSSL found."
-    # Check if docker can login
+    # IF push is enabled, get registry certificate
     if [[ PUSH_MODE -eq 1 ]]; then
         install_registry_cert
     fi
-    # if cannot login, grab certificate
     echo "--- Prerequisite checks complete ---"
 }
 
@@ -110,7 +110,20 @@ validate_images_file() {
     echo "Images file '$IMAGES_FILE' is valid."
 }
 
+create_bridge_json () {
+  echo "pre-creating docker bridge json..."
+  mkdir -p /etc/docker
+  cat <<EOF | tee /etc/docker/daemon.json > /dev/null
+{
+  "bip": "$DOCKER_BRIDGE_CIDR"
+}
+EOF
+  echo "Created /etc/docker/daemon.json with bip: $DOCKER_BRIDGE_CIDR"
+}
+
+
 install_docker() {
+    create_bridge_json
     curl -fsSL https://get.docker.com | sh -s --
     usermod -aG docker $user_name
     if ! command -v docker &> /dev/null; then
