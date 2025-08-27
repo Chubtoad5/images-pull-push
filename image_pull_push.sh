@@ -17,7 +17,6 @@ REGISTRY_URL=""
 REGISTRY_USER=""
 REGISTRY_PASS=""
 CLEANUP_REQUIRED=0
-INSTALL_DOCKER=0
 ADD_REG_CERT=0
 TEMP_DIR=""
 user_name=$SUDO_USER
@@ -89,20 +88,18 @@ validate_prerequisites() {
     # Check for Docker
     if ! command -v docker &> /dev/null; then
         echo "Warning: Docker CLI is not installed. Script will attempt to install it."
-        INSTALL_DOCKER=1
-    fi
-    echo "Docker CLI found."
-    if [[ $INSTALL_DOCKER -eq 1 ]]; then
         install_docker
+    else
+        echo "Docker CLI found."
     fi
-    # Check for OpenSSL
-    if ! command -v openssl &> /dev/null; then
-        echo "Error: openssl is not installed. Please install it with your system's package manager."
-        exit 1
-    fi
-    echo "OpenSSL found."
     # IF push is enabled, get registry certificate
     if [[ PUSH_MODE -eq 1 ]]; then
+        # Check for OpenSSL
+        if ! command -v openssl &> /dev/null; then
+            echo "Error: openssl is not installed. Please install it with your system's package manager."
+            exit 1
+        fi
+        echo "OpenSSL found."
         install_registry_cert
     fi
     echo "--- Prerequisite checks complete ---"
@@ -153,7 +150,16 @@ install_docker() {
         local_repo_dir="$TEMP_DIR/offline-docker-packages"
         case "$os_id" in
             ubuntu|debian)
-                # offline install
+                source_dir="/etc/apt/sources.list.d/"
+                mv /etc/apt/sources.list /etc/apt/sources.list.bak
+                mv ${source_dir}ubuntu.sources ${source_dir}ubuntu.sources.bak
+                for file in "${source_dir}"*.list; do 
+                  echo "found $(basename $file), backing up to $(basename $file.bak)"
+                  echo "mv $file $file.bak"
+                done
+                echo "deb [trusted=yes] file:$local_repo_dir ./" | tee -a /etc/apt/sources.list.d/docker-offline.list
+                apt-get update
+                apt-get install -y "${OFFLINE_PACKAGES[@]}"
                 ;;
             rhel|centos|rocky|almalinux|fedora)
                 # offline install for RHEL based
@@ -165,10 +171,14 @@ enabled=1
 gpgcheck=0
 EOF
                 dnf clean all
-                dnf --disablerepo="*" --enablerepo="docker-offline-repo" install "${OFFLINE_PACKAGES[@]}"
+                dnf --disablerepo="*" --enablerepo="docker-offline-repo" install -y "${OFFLINE_PACKAGES[@]}"
+
                 ;;
             sles|opensuse-leap)
-                # offline install
+                # offline install for SLES based
+                zypper addrepo "file://$local_repo_dir" "docker-offline-repo"
+                zypper refresh
+                zypper --no-refresh install -y "${OFFLINE_PACKAGES[@]}"
                 ;;
             *)
                 echo "Error: Unsupported OS '$os_id'. Manual install of Docker required."
@@ -177,12 +187,12 @@ EOF
         esac
     else   
         curl -fsSL https://get.docker.com | sh -s --
-        usermod -aG docker $user_name
     fi
     if ! command -v docker &> /dev/null; then
         echo "Error: Docker installation failed."
         exit 1
     fi
+    usermod -aG docker $user_name
 }
 
 save_docker_packages() {
@@ -195,7 +205,7 @@ save_docker_packages() {
             mkdir -p "$DOWNLOAD_DIR"
             echo "installing dpkg-dev..."
             # Using sudo and -y -qq for non-interactive installation
-            sudo DEBIAN_FRONTEND=noninteractive apt-get -y -qq install dpkg-dev
+            echo "" | DEBIAN_FRONTEND=noninteractive apt-get -y -qq install dpkg-dev
 
             echo "Downloading ${OFFLINE_PACKAGES[*]}..."
             cd "$DOWNLOAD_DIR"
@@ -209,8 +219,8 @@ save_docker_packages() {
                 return 1
             fi
             
-            sudo apt-get download $packages_to_download
-            sudo dpkg-scanpackages -m . > Packages
+            apt-get download $packages_to_download
+            dpkg-scanpackages -m . > Packages
             cd "$base_dir"
             echo "Completed creating Docker repository metadata for $os_id."
             ;;
@@ -219,11 +229,11 @@ save_docker_packages() {
             mkdir -p "$DOWNLOAD_DIR"
             echo "installing dnf-utils and createrepo_c..."
             # Use sudo and -y for non-interactive installation
-            sudo dnf install -y dnf-utils createrepo_c
+            dnf install -y dnf-utils createrepo_c
 
             echo "Downloading ${OFFLINE_PACKAGES[*]}..."
-            sudo dnf download --resolve --downloaddir="$DOWNLOAD_DIR" "${OFFLINE_PACKAGES[@]}"
-            sudo createrepo_c "$DOWNLOAD_DIR"
+            dnf download --resolve --downloaddir="$DOWNLOAD_DIR" "${OFFLINE_PACKAGES[@]}"
+            createrepo_c "$DOWNLOAD_DIR"
             echo "Completed creating Docker repository metadata for $os_id."
             ;;
 
@@ -231,20 +241,20 @@ save_docker_packages() {
             mkdir -p "$DOWNLOAD_DIR"
             echo "installing createrepo_c..."
             # Correcting the package manager from dnf to zypper
-            sudo zypper install -y createrepo_c
+            zypper install -y createrepo_c
 
             # Clean up cache before downloading to avoid conflicts
             echo "Cleaning Zypper cache..."
-            sudo rm -rf /var/cache/zypp/packages/*
+            rm -rf /var/cache/zypp/packages/*
 
             echo "Downloading ${OFFLINE_PACKAGES[*]}..."
-            sudo zypper install --download-only "${OFFLINE_PACKAGES[@]}"
+            zypper install --download-only "${OFFLINE_PACKAGES[@]}"
             
             # Use find with -exec to handle any directory structure issues in the cache
             # This is more robust than a simple `cp`.
             find /var/cache/zypp/packages/ -name "*.rpm" -exec sudo cp {} "$DOWNLOAD_DIR" \;
 
-            sudo createrepo_c "$DOWNLOAD_DIR"
+            createrepo_c "$DOWNLOAD_DIR"
             echo "Completed creating Docker repository metadata for $os_id."
             ;;
 
