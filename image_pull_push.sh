@@ -157,7 +157,7 @@ install_docker() {
                   echo "found $(basename $file), backing up to $(basename $file.bak)"
                   echo "mv $file $file.bak"
                 done
-                echo "deb [trusted=yes] file:$local_repo_dir ./" | tee -a /etc/apt/sources.list.d/docker-offline.list
+                echo "deb [trusted=yes] file:$local_repo_dir ./" &> /dev/null | tee -a /etc/apt/sources.list.d/docker-offline.list 
                 apt-get update
                 apt-get install -y -qq "${OFFLINE_PACKAGES[@]}"
                 ;;
@@ -186,7 +186,7 @@ EOF
                 ;;
         esac
     else   
-        curl -fsSL https://get.docker.com | sh -s --
+        curl -fsSL https://get.docker.com | sh -s -- &> /dev/null
     fi
     if ! command -v docker &> /dev/null; then
         echo "Error: Docker installation failed."
@@ -205,7 +205,7 @@ save_docker_packages() {
             mkdir -p "$DOWNLOAD_DIR"
             echo "installing dpkg-dev..."
             # Using sudo and -y -qq for non-interactive installation
-            echo "" | DEBIAN_FRONTEND=noninteractive apt-get -y -qq install dpkg-dev
+            echo "" | DEBIAN_FRONTEND=noninteractive apt-get -y -qq install dpkg-dev &> /dev/null
 
             echo "Downloading ${OFFLINE_PACKAGES[*]}..."
             cd "$DOWNLOAD_DIR"
@@ -219,7 +219,7 @@ save_docker_packages() {
                 return 1
             fi
             
-            apt-get download $packages_to_download
+            apt-get download $packages_to_download 2> /dev/null
             dpkg-scanpackages -m . > Packages
             cd "$base_dir"
             echo "Completed creating Docker repository metadata for $os_id."
@@ -299,7 +299,7 @@ install_registry_cert() {
     if openssl s_client -showcerts -connect "$registry_hostname:$registry_port" < /dev/null 2>/dev/null | openssl x509 -outform PEM > "$cert_path"; then
         echo "Certificate saved to $cert_path."
         echo "Updating system certificate store with command: $update_cmd..."
-        if ! $update_cmd; then
+        if ! $update_cmd &> /dev/null; then
             echo "Error: Failed to update CA trust store. Please check the command output."
             exit 1
         fi
@@ -454,7 +454,7 @@ elif [[ $SAVE_MODE -eq 1 || $PUSH_MODE -eq 1 || $KEEP_MODE -eq 1 ]]; then
         echo "Pulling image: $image"
         
         # Attempt to pull from the original source
-        if docker pull -q "$image"; then
+        if docker pull -q "$image" &> /dev/null; then
             echo "Successfully pulled from original source."
             pull_successful=true
         else
