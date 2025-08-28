@@ -147,49 +147,78 @@ install_docker() {
     # check for airgapped and different OS version installs
     if [[ $AIR_GAPPED_MODE -eq 1 ]]; then
         echo "installing Docker from offline packages..."
-        local_repo_dir="$TEMP_DIR/offline-docker-packages"
+        local_repo_dir="$TEMP_DIR/offline-packages"
         case "$os_id" in
             ubuntu|debian)
                 source_dir="/etc/apt/sources.list.d/"
-                ! mv /etc/apt/sources.list /etc/apt/sources.list.bak || echo "sources.list not found"
-                ! mv ${source_dir}ubuntu.sources ${source_dir}ubuntu.sources.bak || echo "ubuntu.sources not found"
-                shopt -s nullglob  # Optional, but a great way to handle this
-                files=( ${source_dir}*.list )
-                shopt -u nullglob
-
-                if [ ${#files[@]} -gt 0 ]; then
-                    for file in "${files[@]}"; do
-                        echo "found $(basename "$file"), backing up to $(basename "$file").bak"
-                        echo "mv \"$file\" \"$file.bak\""
+                # Back up and disable existing online repositories
+                echo "Disabling online repositories..."
+                if [ -d "$source_dir" ]; then
+                    for file in "$source_dir"/*; do
+                        [ -e "$file" ] && mv "$file" "${file}.bak"
                     done
+                    [ -e "/etc/apt/sources.list" ] && mv /etc/apt/sources.list /etc/apt/sources.list.bak
                 else
-                    echo "No .list files found in ${source_dir}. Skipping loop."
+                    echo "Sources.list directory not found. Skipping backup."
                 fi
-                echo "deb [trusted=yes] file:$local_repo_dir ./" | tee -a /etc/apt/sources.list.d/docker-offline.list 
+                echo "Creating local repository and installing offline packages..."
+                echo "deb [trusted=yes] file:$local_repo_dir ./" | tee -a /etc/apt/sources.list.d/offline-packages.list 
                 apt-get update -qq
-                echo "" | DEBIAN_FRONTEND=noninteractive apt-get install -y -q "${OFFLINE_PACKAGES[@]}"
+                echo "" | DEBIAN_FRONTEND=noninteractive apt-get install -y -qq "${OFFLINE_PACKAGES[@]}" &> /dev/null
+                echo "Restoring online repositories..."
+                rm -f /etc/apt/sources.list.d/offline-packages.list
+                if [ -d "$source_dir" ]; then
+                    for file in "$source_dir"/*.bak; do
+                        [ -e "$file" ] && mv "$file" "${file%.bak}"
+                    done
+                    [ -e "/etc/apt/sources.list.bak" ] && mv /etc/apt/sources.list.bak /etc/apt/sources.list
+                else
+                    echo "Sources.list directory not found. Skipping restore."
+                fi
                 ;;
             rhel|centos|rocky|almalinux|fedora)
                 # offline install for RHEL based
-                cat <<EOF | sudo tee /etc/yum.repos.d/rke2-offline.repo
-[docker-offline-repo]
-name=Docker Offline Repository
+                    cat <<EOF | tee /etc/yum.repos.d/offline-packages.repo
+[offline-packages-repo]
+name=Offline Packages Repository
 baseurl=file://$local_repo_dir
 enabled=1
 gpgcheck=0
 EOF
-                dnf clean all
-                dnf --disablerepo="*" --enablerepo="docker-offline-repo" install -y "${OFFLINE_PACKAGES[@]}"
-
+                if command -v dnf &> /dev/null; then
+                    dnf clean all
+                    dnf --disablerepo="*" --enablerepo="offline-packages-repo" install -y "${OFFLINE_PACKAGES[@]}"
+                elif command -f yum &> /dev/null; then
+                    yum clean all
+                    yum --disablerepo="*" --enablerepo="offline-packages-repo" install -y "${OFFLINE_PACKAGES[@]}"
+                else
+                    echo "Repository directory not found. Skipping backup."
+                fi
+                rm -f /etc/yum.repos.d/offline-packages.repo
                 ;;
             sles|opensuse-leap)
                 # offline install for SLES based
-                zypper addrepo "file://$local_repo_dir" "docker-offline-repo"
+                echo "Disabling online repositories..."
+                zypper repos --export /tmp/repos.bak
+                zypper removerepo --all
+
+                # Add the local repository
+                echo "Creating local repository..."
+                zypper addrepo "file://$local_repo_dir" "offline-packages-repo"
+                
+                # Refresh and install packages
                 zypper refresh
                 zypper --no-refresh install -y "${OFFLINE_PACKAGES[@]}"
+                
+                # Clean up and restore
+                echo "Restoring online repositories..."
+                zypper removerepo offline-packages-repo
+                zypper repos --import /tmp/repos.bak
+                rm -f /tmp/repos.bak
                 ;;
             *)
                 echo "Error: Unsupported OS '$os_id'. Manual install of Docker required."
+                rm -rf /etc/docker
                 exit 1
                 ;;
         esac
@@ -198,6 +227,7 @@ EOF
     fi
     if ! command -v docker &> /dev/null; then
         echo "Error: Docker installation failed."
+        rm -rf /etc/docker
         exit 1
     fi
     usermod -aG docker $user_name
@@ -205,7 +235,7 @@ EOF
 
 save_docker_packages() {
     echo "Saving offline Docker package for $os_id..."
-    DOWNLOAD_DIR="$TEMP_DIR/offline-docker-packages"
+    DOWNLOAD_DIR="$TEMP_DIR/offline-packages"
     local base_dir=$(pwd)
 
     case "$os_id" in
@@ -219,7 +249,7 @@ save_docker_packages() {
             cd "$DOWNLOAD_DIR"
             # Get the full list of packages, including dependencies.
             # Add a check to ensure the list is not empty
-            local packages_to_download=$(sudo apt-cache depends --recurse --no-recommends --no-suggests --no-conflicts --no-breaks --no-replaces --no-enhances --no-pre-depends "${OFFLINE_PACKAGES[@]}" | grep "^\w")
+            local packages_to_download=$(apt-cache depends --recurse --no-recommends --no-suggests --no-conflicts --no-breaks --no-replaces --no-enhances --no-pre-depends "${OFFLINE_PACKAGES[@]}" | grep "^\w")
             
             if [[ -z "$packages_to_download" ]]; then
                 echo "Error: Failed to resolve dependencies for Docker packages. Aborting." >&2
@@ -227,7 +257,12 @@ save_docker_packages() {
                 return 1
             fi
             
-            apt-get download $packages_to_download 2> /dev/null
+            apt-get download $packages_to_download &> /dev/null
+            if [[ $? -ne 0 ]]; then
+                echo "Error: apt-get download failed." >&2
+                cd "$base_dir"
+                return 1
+            fi
             dpkg-scanpackages -m . > Packages
             cd "$base_dir"
             echo "Completed creating Docker repository metadata for $os_id."
@@ -525,7 +560,7 @@ elif [[ $SAVE_MODE -eq 1 || $PUSH_MODE -eq 1 || $KEEP_MODE -eq 1 ]]; then
         # Combine the compressed images tarball and the manifest into the final deliverable
         echo "Combining compressed images and manifest into final archive '$SAVE_FILE_NAME'..."
         if [[ -d "$DOWNLOAD_DIR" ]]; then
-          tar -czf "$SAVE_FILE_NAME" -C "$TEMP_DIR" "images.tar.gz" "manifest.txt" "offline-docker-packages"
+          tar -czf "$SAVE_FILE_NAME" -C "$TEMP_DIR" "images.tar.gz" "manifest.txt" "offline-packages"
         else
           tar -czf "$SAVE_FILE_NAME" -C "$TEMP_DIR" "images.tar.gz" "manifest.txt"
         fi
@@ -583,7 +618,7 @@ if [[ $PUSH_MODE -eq 1 ]]; then
         
         # Push the tagged image
         echo "Pushing '$new_tag' to registry..."
-        if ! docker push -q "$new_tag"; then
+        if ! docker push -q "$new_tag" &> /dev/null; then
             echo "Error: Failed to push image '$new_tag'. Skipping."
             failed_pushes+=("$image")
             continue
