@@ -159,7 +159,7 @@ install_docker() {
                 done
                 echo "deb [trusted=yes] file:$local_repo_dir ./" | tee -a /etc/apt/sources.list.d/docker-offline.list
                 apt-get update
-                apt-get install -y "${OFFLINE_PACKAGES[@]}"
+                apt-get install -y -qq "${OFFLINE_PACKAGES[@]}"
                 ;;
             rhel|centos|rocky|almalinux|fedora)
                 # offline install for RHEL based
