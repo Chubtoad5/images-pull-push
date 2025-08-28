@@ -151,15 +151,23 @@ install_docker() {
         case "$os_id" in
             ubuntu|debian)
                 source_dir="/etc/apt/sources.list.d/"
-                mv /etc/apt/sources.list /etc/apt/sources.list.bak
-                mv ${source_dir}ubuntu.sources ${source_dir}ubuntu.sources.bak
-                for file in "${source_dir}"*.list; do 
-                  echo "found $(basename $file), backing up to $(basename $file.bak)"
-                  echo "mv $file $file.bak"
-                done
-                echo "deb [trusted=yes] file:$local_repo_dir ./" &> /dev/null | tee -a /etc/apt/sources.list.d/docker-offline.list 
-                apt-get update
-                apt-get install -y -qq "${OFFLINE_PACKAGES[@]}"
+                ! mv /etc/apt/sources.list /etc/apt/sources.list.bak || echo "sources.list not found"
+                ! mv ${source_dir}ubuntu.sources ${source_dir}ubuntu.sources.bak || echo "ubuntu.sources not found"
+                shopt -s nullglob  # Optional, but a great way to handle this
+                files=( ${source_dir}*.list )
+                shopt -u nullglob
+
+                if [ ${#files[@]} -gt 0 ]; then
+                    for file in "${files[@]}"; do
+                        echo "found $(basename "$file"), backing up to $(basename "$file").bak"
+                        echo "mv \"$file\" \"$file.bak\""
+                    done
+                else
+                    echo "No .list files found in ${source_dir}. Skipping loop."
+                fi
+                echo "deb [trusted=yes] file:$local_repo_dir ./" | tee -a /etc/apt/sources.list.d/docker-offline.list 
+                apt-get update -qq
+                echo "" | DEBIAN_FRONTEND=noninteractive apt-get install -y -q "${OFFLINE_PACKAGES[@]}"
                 ;;
             rhel|centos|rocky|almalinux|fedora)
                 # offline install for RHEL based
@@ -426,7 +434,7 @@ if [[ $AIR_GAPPED_MODE -eq 1 ]]; then
     fi
 
     echo "Loading images from '$TAR_IMAGE_FILE_IN_ARCHIVE'..."
-    if ! docker load -i "$TAR_IMAGE_FILE_IN_ARCHIVE"; then
+    if ! docker load -i "$TAR_IMAGE_FILE_IN_ARCHIVE" &> /dev/null; then
         echo "Error: Failed to load images from the tar archive."
         exit 1
     fi
