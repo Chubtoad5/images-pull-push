@@ -21,7 +21,7 @@ ADD_REG_CERT=0
 TEMP_DIR=""
 user_name=$SUDO_USER
 DOCKER_BRIDGE_CIDR=172.30.0.1/16
-OFFLINE_PACKAGES=(docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin)
+DOCKER_PACKAGES=(docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin)
 os_id=""
 
 # --- Helper Functions ---
@@ -146,75 +146,31 @@ install_docker() {
     create_bridge_json
     # check for airgapped and different OS version installs
     if [[ $AIR_GAPPED_MODE -eq 1 ]]; then
-        echo "installing Docker from offline packages..."
-        local_repo_dir="$TEMP_DIR/offline-packages"
+        # use helper script offline mode
+        $TEMP_DIR/install_packages.sh offline "${DOCKER_PACKAGES[@]}"
+    else
+        # import docker repos before running helper script
         case "$os_id" in
-            ubuntu|debian)
-                source_dir="/etc/apt/sources.list.d/"
-                # Back up and disable existing online repositories
-                echo "Disabling online repositories..."
-                if [ -d "$source_dir" ]; then
-                    for file in "$source_dir"/*; do
-                        [ -e "$file" ] && mv "$file" "${file}.bak"
-                    done
-                    [ -e "/etc/apt/sources.list" ] && mv /etc/apt/sources.list /etc/apt/sources.list.bak
-                else
-                    echo "Sources.list directory not found. Skipping backup."
-                fi
-                echo "Creating local repository and installing offline packages..."
-                echo "deb [trusted=yes] file:$local_repo_dir ./" | tee -a /etc/apt/sources.list.d/offline-packages.list 
-                apt-get update -qq
-                echo "" | DEBIAN_FRONTEND=noninteractive apt-get install -y -qq "${OFFLINE_PACKAGES[@]}" &> /dev/null
-                echo "Restoring online repositories..."
-                rm -f /etc/apt/sources.list.d/offline-packages.list
-                if [ -d "$source_dir" ]; then
-                    for file in "$source_dir"/*.bak; do
-                        [ -e "$file" ] && mv "$file" "${file%.bak}"
-                    done
-                    [ -e "/etc/apt/sources.list.bak" ] && mv /etc/apt/sources.list.bak /etc/apt/sources.list
-                else
-                    echo "Sources.list directory not found. Skipping restore."
-                fi
+            ubuntu)
+                install -m 0755 -d /etc/apt/keyrings
+                curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
+                chmod a+r /etc/apt/keyrings/docker.asc
+                echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu $(. /etc/os-release && echo "${UBUNTU_CODENAME:-$VERSION_CODENAME}") stable" | tee /etc/apt/sources.list.d/docker.list > /dev/null
                 ;;
-            rhel|centos|rocky|almalinux|fedora)
-                # offline install for RHEL based
-                    cat <<EOF | tee /etc/yum.repos.d/offline-packages.repo
-[offline-packages-repo]
-name=Offline Packages Repository
-baseurl=file://$local_repo_dir
-enabled=1
-gpgcheck=0
-EOF
-                if command -v dnf &> /dev/null; then
-                    dnf clean all
-                    dnf --disablerepo="*" --enablerepo="offline-packages-repo" install -y "${OFFLINE_PACKAGES[@]}"
-                elif command -f yum &> /dev/null; then
-                    yum clean all
-                    yum --disablerepo="*" --enablerepo="offline-packages-repo" install -y "${OFFLINE_PACKAGES[@]}"
-                else
-                    echo "Repository directory not found. Skipping backup."
-                fi
-                rm -f /etc/yum.repos.d/offline-packages.repo
+            debian)
+                install -m 0755 -d /etc/apt/keyrings
+                curl -fsSL https://download.docker.com/linux/debian/gpg -o /etc/apt/keyrings/docker.asc
+                chmod a+r /etc/apt/keyrings/docker.asc
+                echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/debian $(. /etc/os-release && echo "$VERSION_CODENAME") stable" | tee /etc/apt/sources.list.d/docker.list > /dev/null
                 ;;
-            sles|opensuse-leap)
-                # offline install for SLES based
-                echo "Disabling online repositories..."
-                zypper repos --export /tmp/repos.bak
-                zypper removerepo --all
-
-                # Add the local repository
-                echo "Creating local repository..."
-                zypper addrepo "file://$local_repo_dir" "offline-packages-repo"
-                
-                # Refresh and install packages
-                zypper refresh
-                zypper --no-refresh install -y "${OFFLINE_PACKAGES[@]}"
-                
-                # Clean up and restore
-                echo "Restoring online repositories..."
-                zypper removerepo offline-packages-repo
-                zypper repos --import /tmp/repos.bak
-                rm -f /tmp/repos.bak
+            rhel|rocky|almalinux)
+                dnf config-manager --add-repo https://download.docker.com/linux/rhel/docker-ce.repo
+                ;;
+            centos)
+                dnf config-manager --add-repo https://download.docker.com/linux/centos/docker-ce.repo
+                ;;
+            fedora)
+                dnf-3 config-manager --add-repo https://download.docker.com/linux/fedora/docker-ce.repo
                 ;;
             *)
                 echo "Error: Unsupported OS '$os_id'. Manual install of Docker required."
@@ -222,9 +178,12 @@ EOF
                 exit 1
                 ;;
         esac
-    else   
-        curl -fsSL https://get.docker.com | sh -s -- &> /dev/null
+        # use helper script online mode
+        curl -fsSL https://github.com/Chubtoad5/install-packages/raw/refs/heads/main/install_packages.sh -o $TEMP_DIR/install_packages.sh
+        chmod +x $TEMP_DIR/install_packages.sh
+        $TEMP_DIR/install_packages.sh online "${DOCKER_PACKAGES[@]}"
     fi
+    # install using helper script
     if ! command -v docker &> /dev/null; then
         echo "Error: Docker installation failed."
         rm -rf /etc/docker
@@ -234,78 +193,13 @@ EOF
 }
 
 save_docker_packages() {
-    echo "Saving offline Docker package for $os_id..."
-    DOWNLOAD_DIR="$TEMP_DIR/offline-packages"
-    local base_dir=$(pwd)
-
-    case "$os_id" in
-        ubuntu|debian)
-            mkdir -p "$DOWNLOAD_DIR"
-            echo "installing dpkg-dev..."
-            # Using sudo and -y -qq for non-interactive installation
-            echo "" | DEBIAN_FRONTEND=noninteractive apt-get -y -qq install dpkg-dev &> /dev/null
-
-            echo "Downloading ${OFFLINE_PACKAGES[*]}..."
-            cd "$DOWNLOAD_DIR"
-            # Get the full list of packages, including dependencies.
-            # Add a check to ensure the list is not empty
-            local packages_to_download=$(apt-cache depends --recurse --no-recommends --no-suggests --no-conflicts --no-breaks --no-replaces --no-enhances --no-pre-depends "${OFFLINE_PACKAGES[@]}" | grep "^\w")
-            
-            if [[ -z "$packages_to_download" ]]; then
-                echo "Error: Failed to resolve dependencies for Docker packages. Aborting." >&2
-                cd "$base_dir"
-                return 1
-            fi
-            
-            apt-get download $packages_to_download &> /dev/null
-            if [[ $? -ne 0 ]]; then
-                echo "Error: apt-get download failed." >&2
-                cd "$base_dir"
-                return 1
-            fi
-            dpkg-scanpackages -m . > Packages
-            cd "$base_dir"
-            echo "Completed creating Docker repository metadata for $os_id."
-            ;;
-
-        rhel|centos|rocky|almalinux|fedora)
-            mkdir -p "$DOWNLOAD_DIR"
-            echo "installing dnf-utils and createrepo_c..."
-            # Use sudo and -y for non-interactive installation
-            dnf install -y dnf-utils createrepo_c
-
-            echo "Downloading ${OFFLINE_PACKAGES[*]}..."
-            dnf download --resolve --downloaddir="$DOWNLOAD_DIR" "${OFFLINE_PACKAGES[@]}"
-            createrepo_c "$DOWNLOAD_DIR"
-            echo "Completed creating Docker repository metadata for $os_id."
-            ;;
-
-        sles|opensuse-leap)
-            mkdir -p "$DOWNLOAD_DIR"
-            echo "installing createrepo_c..."
-            # Correcting the package manager from dnf to zypper
-            zypper install -y createrepo_c
-
-            # Clean up cache before downloading to avoid conflicts
-            echo "Cleaning Zypper cache..."
-            rm -rf /var/cache/zypp/packages/*
-
-            echo "Downloading ${OFFLINE_PACKAGES[*]}..."
-            zypper install --download-only "${OFFLINE_PACKAGES[@]}"
-            
-            # Use find with -exec to handle any directory structure issues in the cache
-            # This is more robust than a simple `cp`.
-            find /var/cache/zypp/packages/ -name "*.rpm" -exec sudo cp {} "$DOWNLOAD_DIR" \;
-
-            createrepo_c "$DOWNLOAD_DIR"
-            echo "Completed creating Docker repository metadata for $os_id."
-            ;;
-
-        *)
-            echo "Error: Unsupported OS '$os_id'. Manual download of Docker binaries may be required for air-gapped mode." >&2
-            return 1
-            ;;
-    esac
+    echo "Creating offline Docker package..."
+    if [[ ! -f $TEMP_DIR/install_packages.sh ]]; then
+        curl -fsSL https://github.com/Chubtoad5/install-packages/raw/refs/heads/main/install_packages.sh -o $TEMP_DIR/install_packages.sh
+        chmod +x $TEMP_DIR/install_packages.sh
+    fi
+    $TEMP_DIR/install_packages.sh save "${DOCKER_PACKAGES[@]}"
+    mv offline-packages.tar.gz $TEMP_DIR/offline-packages.tar.gz
 }
 
 # Function to get and install the registry certificate based on OS
@@ -559,12 +453,7 @@ elif [[ $SAVE_MODE -eq 1 || $PUSH_MODE -eq 1 || $KEEP_MODE -eq 1 ]]; then
         
         # Combine the compressed images tarball and the manifest into the final deliverable
         echo "Combining compressed images and manifest into final archive '$SAVE_FILE_NAME'..."
-        if [[ -d "$DOWNLOAD_DIR" ]]; then
-          tar -czf "$SAVE_FILE_NAME" -C "$TEMP_DIR" "images.tar.gz" "manifest.txt" "offline-packages"
-        else
-          tar -czf "$SAVE_FILE_NAME" -C "$TEMP_DIR" "images.tar.gz" "manifest.txt"
-        fi
-
+        tar -czf "$SAVE_FILE_NAME" -C "$TEMP_DIR" "images.tar.gz" "manifest.txt" "offline-packages.tar.gz" "install_packages.sh"
         if [[ $? -ne 0 ]]; then
             echo "Error: Failed to create the final tar.gz archive."
             exit 1
@@ -669,4 +558,5 @@ if [[ $AIR_GAPPED_MODE -eq 1 ]] && [[ $KEEP_MODE -eq 0 ]]; then
 fi
 
 echo "Script completed successfully."
+echo "Copy the archive '$SAVE_FILE_NAME' and $SCRIPT_NAME to the air-gapped host. Then run $SCRIPT_NAME with -f $SAVE_FILE_NAME"
 exit 0
