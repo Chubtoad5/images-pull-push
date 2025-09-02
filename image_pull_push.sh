@@ -37,7 +37,7 @@ Parameters:
   -f <path_to_images_file>   : Path to the file containing a list of container images and tags (one per line).
                                Alternatively, this can be a .tar.gz file created by this script for air-gapped mode.
   <keep>                     : Optional. If specified, the script will NOT delete the images from the local Docker daemon at the end.
-  <save>                     : Optional. If specified, saves the images to a .tar.gz file.
+  <save>                     : Optional. If specified, saves the images and manifest to a .tar.gz file.
   <push>                     : Optional. Pushes the images to a specified registry after saving.
   <registry:port>            : Required when <push> is specified. The target registry URL and port.
   <username>                 : Optional. The username for the registry.
@@ -556,7 +556,7 @@ if [[ $AIR_GAPPED_MODE -eq 1 ]] && [[ $KEEP_MODE -eq 0 ]]; then
         fi
     fi
 fi
-
-echo "Script completed successfully."
+echo ""
+echo "--- Script completed successfully ---"
 echo "Copy the archive '$SAVE_FILE_NAME' and $SCRIPT_NAME to the air-gapped host. Then run $SCRIPT_NAME with -f $SAVE_FILE_NAME"
 exit 0
