@@ -557,6 +557,5 @@ if [[ $AIR_GAPPED_MODE -eq 1 ]] && [[ $KEEP_MODE -eq 0 ]]; then
     fi
 fi
 echo ""
-echo "Copy the archive '$SAVE_FILE_NAME' and $SCRIPT_NAME to the air-gapped host. Then run $SCRIPT_NAME with -f $SAVE_FILE_NAME"
 echo "--- Image_pull_push completed successfully ---"
 exit 0
