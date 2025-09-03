@@ -556,6 +556,5 @@ if [[ $AIR_GAPPED_MODE -eq 1 ]] && [[ $KEEP_MODE -eq 0 ]]; then
         fi
     fi
 fi
-echo ""
 echo "--- Image_pull_push completed successfully ---"
 exit 0
