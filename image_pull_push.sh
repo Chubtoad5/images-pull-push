@@ -77,6 +77,11 @@ trap cleanup EXIT
 validate_prerequisites() {
     echo "--- Performing prerequisite checks ---"
     if [[ "$IMAGES_FILE" =~ \.tar\.gz$ ]]; then
+      if [[ ! -s "$IMAGES_FILE" ]]; then
+          echo "Error: Images file '$IMAGES_FILE' is empty."
+          exit 1
+      fi
+      echo "Images file '$IMAGES_FILE' is valid."
       AIR_GAPPED_MODE=1
       echo "--- Air-gapped mode detected ---"
       echo "Extracting '$IMAGES_FILE'..."
@@ -103,19 +108,6 @@ validate_prerequisites() {
         install_registry_cert
     fi
     echo "--- Prerequisite checks complete ---"
-}
-
-# Function to validate the images file
-validate_images_file() {
-    if [[ ! -f "$IMAGES_FILE" ]]; then
-        echo "Error: Images file '$IMAGES_FILE' not found."
-        exit 1
-    fi
-    if [[ ! -s "$IMAGES_FILE" ]]; then
-        echo "Error: Images file '$IMAGES_FILE' is empty."
-        exit 1
-    fi
-    echo "Images file '$IMAGES_FILE' is valid."
 }
 
 os_type() {
@@ -342,9 +334,6 @@ fi
 # Run preflight checks
 validate_prerequisites
 
-# Validate the images file
-validate_images_file
-
 # Store the list of image names to be managed
 declare -a images_to_manage
 
@@ -354,8 +343,8 @@ if [[ $AIR_GAPPED_MODE -eq 1 ]]; then
     echo "--- Handling container images in Air-gapped mode ---"
         
     # Find the images.tar and the original manifest file
-    TAR_IMAGE_FILE_IN_ARCHIVE=$(find "$TEMP_DIR" -type f -name "*.tar.gz")
-    MANIFEST_FILE_IN_ARCHIVE=$(find "$TEMP_DIR" -type f -name "*.txt")
+    TAR_IMAGE_FILE_IN_ARCHIVE=$(find "$TEMP_DIR" -type f -name "images/*.tar.gz")
+    MANIFEST_FILE_IN_ARCHIVE=$(find "$TEMP_DIR" -type f -name "images/*.txt")
     
     if [[ ! -f "$TAR_IMAGE_FILE_IN_ARCHIVE" || ! -f "$MANIFEST_FILE_IN_ARCHIVE" ]]; then
         echo "Error: The extracted archive did not contain the expected imagges 'tar.gz' or a manifest '.txt' file."
@@ -441,7 +430,8 @@ elif [[ $SAVE_MODE -eq 1 || $PUSH_MODE -eq 1 || $KEEP_MODE -eq 1 ]]; then
         save_docker_packages
         # Create a compressed tarball of the images directly from docker save stream
         echo "Saving and compressing images..."
-        docker save "${images_to_manage[@]}" | gzip > "$TEMP_DIR/images.tar.gz"
+        mkdir -p "$TEMP_DIR/images"
+        docker save "${images_to_manage[@]}" | gzip > "$TEMP_DIR/images/images.tar.gz"
         
         if [[ $? -ne 0 ]]; then
             echo "Error: Failed to save or compress images to a tar.gz file."
@@ -449,11 +439,11 @@ elif [[ $SAVE_MODE -eq 1 || $PUSH_MODE -eq 1 || $KEEP_MODE -eq 1 ]]; then
         fi
 
         # Copy the original images list file to the temporary directory
-        cp "$IMAGES_FILE" "$TEMP_DIR/manifest.txt"
+        cp "$IMAGES_FILE" "$TEMP_DIR/images/manifest.txt"
         
         # Combine the compressed images tarball and the manifest into the final deliverable
         echo "Combining compressed images and manifest into final archive '$SAVE_FILE_NAME'..."
-        tar -czf "$SAVE_FILE_NAME" -C "$TEMP_DIR" "images.tar.gz" "manifest.txt" "offline-packages.tar.gz" "install_packages.sh"
+        tar -czf "$SAVE_FILE_NAME" -C "$TEMP_DIR" "images" "offline-packages.tar.gz" "install_packages.sh"
         if [[ $? -ne 0 ]]; then
             echo "Error: Failed to create the final tar.gz archive."
             exit 1
