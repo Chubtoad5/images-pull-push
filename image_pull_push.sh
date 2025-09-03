@@ -354,11 +354,11 @@ if [[ $AIR_GAPPED_MODE -eq 1 ]]; then
     echo "--- Handling container images in Air-gapped mode ---"
         
     # Find the images.tar and the original manifest file
-    TAR_IMAGE_FILE_IN_ARCHIVE="$TEMP_DIR/images.tar.gz"
+    TAR_IMAGE_FILE_IN_ARCHIVE=$(find "$TEMP_DIR" -type f -name "*.tar.gz")
     MANIFEST_FILE_IN_ARCHIVE=$(find "$TEMP_DIR" -type f -name "*.txt")
     
     if [[ ! -f "$TAR_IMAGE_FILE_IN_ARCHIVE" || ! -f "$MANIFEST_FILE_IN_ARCHIVE" ]]; then
-        echo "Error: The .tar.gz archive does not contain the expected 'images.tar' or a manifest .txt file."
+        echo "Error: The extracted archive did not contain the expected imagges 'tar.gz' or a manifest '.txt' file."
         exit 1
     fi
 
