@@ -99,8 +99,12 @@ validate_prerequisites() {
     else
         echo "Docker CLI found."
     fi
+    if [[ $DOCKER_MODE -eq 1 ]]; then
+        echo "Docker installed"
+        exit 0
+    fi
     # IF push is enabled, get registry certificate
-    if [[ PUSH_MODE -eq 1 ]]; then
+    if [[ $PUSH_MODE -eq 1 || $REG_CERT_MODE -eq 1 ]]; then
         # Check for OpenSSL
         if ! command -v openssl &> /dev/null; then
             echo "Error: openssl is not installed. Please install it with your system's package manager."
@@ -108,6 +112,10 @@ validate_prerequisites() {
         fi
         echo "OpenSSL found."
         install_registry_cert
+    fi
+    if [[ $REG_CERT_MODE -eq 1 ]]; then
+        echo "Registry certificate installed"
+        exit 0
     fi
     echo "--- Prerequisite checks complete ---"
 }
@@ -323,32 +331,12 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-if  [[ $DOCKER_MODE -eq 1 ]]; then
-    if ! command -v docker &> /dev/null; then
-        echo "Installing Docker"
-        install_docker
-    else
-        echo "Docker CLI found, exiting"
-    fi
-    echo "Completed docker install"
-    exit 0  
-fi
-
-if [[ $REG_CERT_MODE -eq 1 ]]; then
-    if [[ -z "$REGISTRY_URL" ]]; then
-        echo "Error: <registry:port> is required when <reg-cert> is specified."
+# Check if the images file path was provided
+if [[ $DOCKER_MODE -eq 0 || $REG_CERT_MODE -eq 0 ]]; then
+    if [[ -z "$IMAGES_FILE" ]]; then
+        echo "Error: The -f parameter is required."
         usage
     fi
-    echo "Installing registry certificate"
-    install_registry_cert
-    echo "Completed registry certificate install"
-    exit 0
-fi
-
-# Check if the images file path was provided
-if [[ -z "$IMAGES_FILE" ]]; then
-    echo "Error: The -f parameter is required."
-    usage
 fi
 
 # Validate push parameters
