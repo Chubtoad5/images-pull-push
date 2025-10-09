@@ -39,6 +39,8 @@ Parameters:
   <keep>                     : Optional. If specified, the script will NOT delete the images from the local Docker daemon at the end.
   <save>                     : Optional. If specified, saves the images and manifest to a .tar.gz file.
   <push>                     : Optional. Pushes the images to a specified registry after saving.
+  <docker>                   :  If specified will install docker then exit
+  <reg-cert>                 :  If specified will install registry certificate then exit. Requires <registry:port> to be specified
   <registry:port>            : Required when <push> is specified. The target registry URL and port.
   <username>                 : Optional. The username for the registry.
   <password>                 : Optional. Required when <username> is specified. The password for the registry.
@@ -279,6 +281,14 @@ while [[ $# -gt 0 ]]; do
             shift # Skip the -f flag
             shift # Skip the file path
             ;;
+        docker)
+            DOCKER_MODE=1
+            shift
+            ;;
+        reg-cert)
+            REG_CERT_MODE=1
+            shift
+            ;;    
         keep)
             KEEP_MODE=1
             shift
@@ -293,7 +303,7 @@ while [[ $# -gt 0 ]]; do
             ;;
         *)
             # Handle registry URL, username, and password
-            if [[ $PUSH_MODE -eq 1 ]]; then
+            if [[ $PUSH_MODE -eq 1 || $REG_CERT_MODE -eq 1 ]]; then
                 if [[ -z "$REGISTRY_URL" ]]; then
                     REGISTRY_URL="$1"
                 elif [[ -z "$REGISTRY_USER" ]]; then
@@ -312,6 +322,28 @@ while [[ $# -gt 0 ]]; do
             ;;
     esac
 done
+
+if  [[ $DOCKER_MODE -eq 1 ]]; then
+    if ! command -v docker &> /dev/null; then
+        echo "Installing Docker"
+        install_docker
+    else
+        echo "Docker CLI found, exiting"
+    fi
+    echo "Completed docker install"
+    exit 0  
+fi
+
+if [[ $REG_CERT_MODE -eq 1 ]]; then
+    if [[ -z "$REGISTRY_URL" ]]; then
+        echo "Error: <registry:port> is required when <reg-cert> is specified."
+        usage
+    fi
+    echo "Installing registry certificate"
+    install_registry_cert
+    echo "Completed registry certificate install"
+    exit 0
+fi
 
 # Check if the images file path was provided
 if [[ -z "$IMAGES_FILE" ]]; then
