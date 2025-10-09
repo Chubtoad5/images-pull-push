@@ -12,6 +12,8 @@ IMAGES_FILE=""
 SAVE_MODE=0
 PUSH_MODE=0
 KEEP_MODE=0
+REG_CERT_MODE=0
+DOCKER_MODE=0
 AIR_GAPPED_MODE=0
 REGISTRY_URL=""
 REGISTRY_USER=""
@@ -41,7 +43,7 @@ Parameters:
   <push>                     : Optional. Pushes the images to a specified registry after saving.
   <docker>                   :  If specified will install docker then exit
   <reg-cert>                 :  If specified will install registry certificate then exit. Requires <registry:port> to be specified
-  <registry:port>            : Required when <push> is specified. The target registry URL and port.
+  <registry:port>            : Required when <push> or <reg-cert> is specified. The target registry URL and port.
   <username>                 : Optional. The username for the registry.
   <password>                 : Optional. Required when <username> is specified. The password for the registry.
 
@@ -93,15 +95,17 @@ validate_prerequisites() {
       fi
     fi
     # Check for Docker
-    if ! command -v docker &> /dev/null; then
-        echo "Warning: Docker CLI is not installed. Script will attempt to install it."
-        install_docker
-    else
-        echo "Docker CLI found."
-    fi
-    if [[ $DOCKER_MODE -eq 1 ]]; then
-        echo "Docker installed"
-        exit 0
+    if [[ $REG_CERT_MODE -eq 0 ]]; then
+        if ! command -v docker &> /dev/null; then
+            echo "Warning: Docker CLI is not installed. Script will attempt to install it."
+            install_docker
+        else
+            echo "Docker CLI found."
+        fi
+        if [[ $DOCKER_MODE -eq 1 ]]; then
+            echo "Docker installed"
+            exit 0
+        fi
     fi
     # IF push is enabled, get registry certificate
     if [[ $PUSH_MODE -eq 1 || $REG_CERT_MODE -eq 1 ]]; then
@@ -332,7 +336,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 # Check if the images file path was provided
-if [[ $DOCKER_MODE -eq 0 || $REG_CERT_MODE -eq 0 ]]; then
+if [[ $DOCKER_MODE -eq 0 && $REG_CERT_MODE -eq 0 ]]; then
     if [[ -z "$IMAGES_FILE" ]]; then
         echo "Error: The -f parameter is required."
         usage
@@ -340,14 +344,16 @@ if [[ $DOCKER_MODE -eq 0 || $REG_CERT_MODE -eq 0 ]]; then
 fi
 
 # Validate push parameters
-if [[ $PUSH_MODE -eq 1 ]]; then
+if [[ $PUSH_MODE -eq 1 || $REG_CERT_MODE -eq 1 ]]; then
     if [[ -z "$REGISTRY_URL" ]]; then
-        echo "Error: <registry:port> is required when <push> is specified."
+        echo "Error: <registry:port> is required when <push> or <reg-cert> is specified."
         usage
     fi
-    if [[ -n "$REGISTRY_USER" ]] && [[ -z "$REGISTRY_PASS" ]]; then
-        echo "Error: A password is required when a username is specified."
-        usage
+    if [[ $PUSH_MODE -eq 1 ]]; then
+        if [[ -n "$REGISTRY_USER" ]] && [[ -z "$REGISTRY_PASS" ]]; then
+            echo "Error: A password is required when a username is specified."
+            usage
+        fi
     fi
 fi
 
