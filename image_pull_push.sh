@@ -22,7 +22,7 @@ CLEANUP_REQUIRED=0
 ADD_REG_CERT=0
 TEMP_DIR=""
 user_name=$SUDO_USER
-DOCKER_BRIDGE_CIDR=172.30.0.1/16
+DOCKER_BRIDGE_CIDR=${DOCKER_BRIDGE_CIDR:-"172.30.0.1/16"}
 DOCKER_PACKAGES=(docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin)
 os_id=""
 
@@ -148,6 +148,38 @@ EOF
   echo "Created /etc/docker/daemon.json with bip: $DOCKER_BRIDGE_CIDR"
 }
 
+add_docker_repo () {
+    echo "Adding docker repo..."
+    case "$os_id" in
+        ubuntu)
+            install -m 0755 -d /etc/apt/keyrings
+            curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
+            chmod a+r /etc/apt/keyrings/docker.asc
+            echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu $(. /etc/os-release && echo "${UBUNTU_CODENAME:-$VERSION_CODENAME}") stable" | tee /etc/apt/sources.list.d/docker.list > /dev/null
+            ;;
+        debian)
+            install -m 0755 -d /etc/apt/keyrings
+            curl -fsSL https://download.docker.com/linux/debian/gpg -o /etc/apt/keyrings/docker.asc
+            chmod a+r /etc/apt/keyrings/docker.asc
+            echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/debian $(. /etc/os-release && echo "$VERSION_CODENAME") stable" | tee /etc/apt/sources.list.d/docker.list > /dev/null
+            ;;
+        rhel|rocky|almalinux)
+            dnf config-manager --add-repo https://download.docker.com/linux/rhel/docker-ce.repo
+            ;;
+        centos)
+            dnf config-manager --add-repo https://download.docker.com/linux/centos/docker-ce.repo
+            ;;
+        fedora)
+            dnf-3 config-manager --add-repo https://download.docker.com/linux/fedora/docker-ce.repo
+            ;;
+        *)
+            echo "Error: Unsupported OS '$os_id'. Manual install of Docker required."
+            rm -rf /etc/docker
+            exit 1
+            ;;
+    esac
+}
+
 install_docker() {
     create_bridge_json
     # check for airgapped and different OS version installs
@@ -156,34 +188,7 @@ install_docker() {
         $TEMP_DIR/install_packages.sh offline "${DOCKER_PACKAGES[@]}"
     else
         # import docker repos before running helper script
-        case "$os_id" in
-            ubuntu)
-                install -m 0755 -d /etc/apt/keyrings
-                curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
-                chmod a+r /etc/apt/keyrings/docker.asc
-                echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu $(. /etc/os-release && echo "${UBUNTU_CODENAME:-$VERSION_CODENAME}") stable" | tee /etc/apt/sources.list.d/docker.list > /dev/null
-                ;;
-            debian)
-                install -m 0755 -d /etc/apt/keyrings
-                curl -fsSL https://download.docker.com/linux/debian/gpg -o /etc/apt/keyrings/docker.asc
-                chmod a+r /etc/apt/keyrings/docker.asc
-                echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/debian $(. /etc/os-release && echo "$VERSION_CODENAME") stable" | tee /etc/apt/sources.list.d/docker.list > /dev/null
-                ;;
-            rhel|rocky|almalinux)
-                dnf config-manager --add-repo https://download.docker.com/linux/rhel/docker-ce.repo
-                ;;
-            centos)
-                dnf config-manager --add-repo https://download.docker.com/linux/centos/docker-ce.repo
-                ;;
-            fedora)
-                dnf-3 config-manager --add-repo https://download.docker.com/linux/fedora/docker-ce.repo
-                ;;
-            *)
-                echo "Error: Unsupported OS '$os_id'. Manual install of Docker required."
-                rm -rf /etc/docker
-                exit 1
-                ;;
-        esac
+        add_docker_repo
         # use helper script online mode
         curl -fsSL https://github.com/Chubtoad5/install-packages/raw/refs/heads/main/install_packages.sh -o $TEMP_DIR/install_packages.sh
         chmod +x $TEMP_DIR/install_packages.sh
