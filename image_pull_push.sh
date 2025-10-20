@@ -304,7 +304,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 # Check that a command was passed
-if [[  && $PUSH_MODE -eq 0  && $KEEP_MODE -eq 0 && $SAVE_MODE -eq 0 && $DOCKER_MODE -eq 0 && $REG_CERT_MODE -eq 0 ]]; then
+if [[ $PUSH_MODE -eq 0 && $KEEP_MODE -eq 0 && $SAVE_MODE -eq 0 && $DOCKER_MODE -eq 0 && $REG_CERT_MODE -eq 0 ]]; then
     echo "Error: No command specified."
     usage
 fi
@@ -512,7 +512,6 @@ if [[ $PUSH_MODE -eq 1 ]] && [[ ${#images_to_manage[@]} -gt 0 ]] && [[ ${#failed
     echo "  --- Deleting local images"
     if ! docker rmi "${images_to_manage[@]}" &> /dev/null; then
         echo "Warning: Could not delete all local images. Some may still exist."
-    else
     fi
 fi
 echo "### --- Image Pull Push ended at $(date) --- ###"
