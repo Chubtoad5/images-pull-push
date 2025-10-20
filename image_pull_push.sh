@@ -72,6 +72,7 @@ cleanup() {
         if [[ -d "$TEMP_DIR" ]]; then
             rm -rf "$TEMP_DIR"
             echo "  Removed temporary directory: $TEMP_DIR"
+            echo "### Image Pull Push ended at $(date) ###"
         fi
     fi
     # Exit with the last command's status
@@ -519,5 +520,4 @@ if [[ $PUSH_MODE -eq 1 ]] && [[ ${#images_to_manage[@]} -gt 0 ]] && [[ ${#failed
         echo "Warning: Could not delete all local images. Some may still exist."
     fi
 fi
-echo "### Image Pull Push ended at $(date) ###"
 exit 0
