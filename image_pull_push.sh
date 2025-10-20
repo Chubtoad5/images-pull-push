@@ -25,6 +25,7 @@ user_name=${SUDO_USER:-$(whoami)}
 DOCKER_BRIDGE_CIDR=${DOCKER_BRIDGE_CIDR:-"172.30.0.1/16"}
 DOCKER_PACKAGES=(docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin)
 os_id=""
+declare -a images_to_manage
 
 # --- Helper Functions ---
 
@@ -67,7 +68,7 @@ EOF
 # Function to handle script exit gracefully
 cleanup() {
     if [[ $CLEANUP_REQUIRED -eq 1 ]]; then
-        echo "--- Performing cleanup"
+        echo "--- Performing image_pull_push cleanup"
         if [[ -d "$TEMP_DIR" ]]; then
             rm -rf "$TEMP_DIR"
             echo "  Removed temporary directory: $TEMP_DIR"
@@ -82,11 +83,10 @@ trap cleanup EXIT
 validate_prerequisites() {
     echo "--- Validating prerequisites"
     # Store the list of image names to be managed
-    declare -a images_to_manage
     if [[ $AIR_GAPPED_MODE -eq 0 ]]; then
         readarray -t images_to_manage < <(grep -vE '^\s*#|^\s*$' "$IMAGES_FILE")
         if [[ ${#images_to_manage[@]} -eq 0 ]]; then
-            echo "Error: The manifest file $$IMAGES_FILE is empty or does not contain valid image names."
+            echo "Error: The manifest file $IMAGES_FILE is empty or does not contain valid image names."
             exit 1
         fi
     fi
@@ -146,7 +146,7 @@ EOF
 }
 
 add_docker_repo () {
-    echo "  Adding docker repo..."
+    echo "  Adding docker repository"
     case "$os_id" in
         ubuntu)
             install -m 0755 -d /etc/apt/keyrings
@@ -178,7 +178,7 @@ add_docker_repo () {
 }
 
 install_docker() {
-    echo "  Installing Docker for $os_id..."
+    echo "  Installing Docker for $os_id"
     create_bridge_json
     if [[ $AIR_GAPPED_MODE -eq 1 ]]; then
         $TEMP_DIR/install_packages.sh offline "${DOCKER_PACKAGES[@]}"
@@ -228,10 +228,10 @@ install_registry_cert() {
             exit 1
             ;;
     esac
-    echo "  Attempting to retrieve certificate for $registry_hostname:$registry_port..."
+    echo "  Attempting to retrieve certificate for $registry_hostname:$registry_port"
     if openssl s_client -showcerts -connect "$registry_hostname:$registry_port" < /dev/null 2>/dev/null | openssl x509 -outform PEM > "$cert_path"; then
-        echo "  Certificate saved to $cert_path."
-        echo "  Updating system certificate store with command: $update_cmd..."
+        echo "  Certificate saved to $cert_path"
+        echo "  Updating system certificate store with command: $update_cmd"
         if ! $update_cmd &> /dev/null; then
             echo "Error: Failed to update CA trust store. Please check the command output."
             exit 1
@@ -243,7 +243,7 @@ install_registry_cert() {
 }
 
 login_to_registry() {
-    echo "  Logging in to registry $REGISTRY_URL..."
+    echo "  Logging in to registry $REGISTRY_URL"
     if [[ -n "$REGISTRY_USER" ]]; then
         if ! docker login "$REGISTRY_URL" --username "$REGISTRY_USER" --password-stdin <<< "$REGISTRY_PASS" &> /dev/null; then
             echo "Error: Failed to log in to registry '$REGISTRY_URL' with the provided credentials."
@@ -382,7 +382,7 @@ if [[ $AIR_GAPPED_MODE -eq 1 ]]; then
         echo "Error: The extracted archive did not contain the expected images 'tar.gz' or a manifest '.txt' file."
         exit 1
     fi
-    echo "  Loading images from '$TAR_IMAGE_FILE_IN_ARCHIVE'..."
+    echo "  Loading images from '$TAR_IMAGE_FILE_IN_ARCHIVE'"
     if ! docker load -i "$TAR_IMAGE_FILE_IN_ARCHIVE" &> /dev/null; then
         echo "Error: Failed to load images from the tar archive."
         exit 1
@@ -403,7 +403,7 @@ elif [[ $SAVE_MODE -eq 1 || $PUSH_MODE -eq 1 || $KEEP_MODE -eq 1 ]]; then
             echo "  successfully pulled from original source."
             pull_successful=true
         else
-            echo "  initial pull failed, retrying with mirror.gcr.io..."
+            echo "  initial pull failed, retrying with mirror.gcr.io"
             # Construct the mirror image URL
             mirror_image="mirror.gcr.io/$image"
             if docker pull -q "$mirror_image"; then
@@ -519,5 +519,5 @@ if [[ $PUSH_MODE -eq 1 ]] && [[ ${#images_to_manage[@]} -gt 0 ]] && [[ ${#failed
         echo "Warning: Could not delete all local images. Some may still exist."
     fi
 fi
-echo "### --- Image Pull Push ended at $(date) --- ###"
+echo "### Image Pull Push ended at $(date) ###"
 exit 0
