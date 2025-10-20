@@ -67,10 +67,10 @@ EOF
 # Function to handle script exit gracefully
 cleanup() {
     if [[ $CLEANUP_REQUIRED -eq 1 ]]; then
-        echo "Performing cleanup..."
+        echo "--- Performing cleanup"
         if [[ -d "$TEMP_DIR" ]]; then
             rm -rf "$TEMP_DIR"
-            echo "Removed temporary directory: $TEMP_DIR"
+            echo "  Removed temporary directory: $TEMP_DIR"
         fi
     fi
     # Exit with the last command's status
@@ -80,16 +80,21 @@ trap cleanup EXIT
 
 # Function to perform validation checks
 validate_prerequisites() {
+    echo "--- Validating prerequisites"
+    # Create a temporary directory for intermediate files
+    TEMP_DIR=$(mktemp -d -t image-pull-push-XXXXXXXX)
+    CLEANUP_REQUIRED=1
+    echo "  Created temporary directory: $TEMP_DIR"
     # Check for Docker
     if [[ $REG_CERT_MODE -eq 0 ]]; then
         if ! command -v docker &> /dev/null; then
             install_docker
         else
-            echo "Docker CLI found."
+            echo "  Docker CLI found."
         fi
         if [[ $DOCKER_MODE -eq 1 ]]; then
-            echo "Docker installed"
-            echo "### --- Image Pull Push ended at $(date) --- ###"
+            echo "  Docker installed"
+            echo "### Image Pull Push ended at $(date) ###"
             exit 0
         fi
     fi
@@ -103,8 +108,8 @@ validate_prerequisites() {
         install_registry_cert
     fi
     if [[ $REG_CERT_MODE -eq 1 ]]; then
-        echo "Registry certificate installed"
-        echo "### --- Image Pull Push ended at $(date) --- ###"
+        echo "  Registry certificate installed"
+        echo "### Image Pull Push ended at $(date) ###"
         exit 0
     fi
 }
@@ -116,7 +121,7 @@ os_type() {
         source /etc/os-release
         os_id="$ID"
     else
-        echo "Unknown or unsupported OS $os_id."
+        echo "Error: Unknown or unsupported OS $os_id."
         exit 1
     fi
 }
@@ -128,11 +133,11 @@ create_bridge_json () {
   "bip": "$DOCKER_BRIDGE_CIDR"
 }
 EOF
-  echo "Created /etc/docker/daemon.json with bip: $DOCKER_BRIDGE_CIDR"
+  echo "  Created /etc/docker/daemon.json with bip: $DOCKER_BRIDGE_CIDR"
 }
 
 add_docker_repo () {
-    echo "Adding docker repo..."
+    echo "  Adding docker repo..."
     case "$os_id" in
         ubuntu)
             install -m 0755 -d /etc/apt/keyrings
@@ -164,7 +169,7 @@ add_docker_repo () {
 }
 
 install_docker() {
-    echo "Installing Docker for $os_id..."
+    echo "  Installing Docker for $os_id..."
     create_bridge_json
     if [[ $AIR_GAPPED_MODE -eq 1 ]]; then
         $TEMP_DIR/install_packages.sh offline "${DOCKER_PACKAGES[@]}"
@@ -214,10 +219,10 @@ install_registry_cert() {
             exit 1
             ;;
     esac
-    echo "Attempting to retrieve certificate for $registry_hostname:$registry_port..."
+    echo "  Attempting to retrieve certificate for $registry_hostname:$registry_port..."
     if openssl s_client -showcerts -connect "$registry_hostname:$registry_port" < /dev/null 2>/dev/null | openssl x509 -outform PEM > "$cert_path"; then
-        echo "Certificate saved to $cert_path."
-        echo "Updating system certificate store with command: $update_cmd..."
+        echo "  Certificate saved to $cert_path."
+        echo "  Updating system certificate store with command: $update_cmd..."
         if ! $update_cmd &> /dev/null; then
             echo "Error: Failed to update CA trust store. Please check the command output."
             exit 1
@@ -229,14 +234,14 @@ install_registry_cert() {
 }
 
 login_to_registry() {
-    echo "Logging in to registry $REGISTRY_URL..."
+    echo "  Logging in to registry $REGISTRY_URL..."
     if [[ -n "$REGISTRY_USER" ]]; then
         if ! docker login "$REGISTRY_URL" --username "$REGISTRY_USER" --password-stdin <<< "$REGISTRY_PASS" &> /dev/null; then
             echo "Error: Failed to log in to registry '$REGISTRY_URL' with the provided credentials."
             exit 1
         fi
     fi
-    echo "Login OK"
+    echo "  Login OK"
 }
 
 # --- Main Script Logic --- #
@@ -339,13 +344,8 @@ if [[ $PUSH_MODE -eq 1 || $REG_CERT_MODE -eq 1 ]]; then
     fi
 fi
 
-# Create a temporary directory for intermediate files
-TEMP_DIR=$(mktemp -d -t image-pull-push-XXXXXXXX)
-CLEANUP_REQUIRED=1
-echo "Created temporary directory: $TEMP_DIR"
-
 # Display runtime arguments
-echo "### --- Image Pull Push started at $(date) --- ###"
+echo "### Image Pull Push started at $(date) ###"
 echo "  AIR-GAPPED MODE: $AIR_GAPPED_MODE"
 echo "  PUSH IMAGES: $PUSH_MODE"
 echo "  KEEP IMAGES: $KEEP_MODE"
@@ -365,7 +365,7 @@ declare -a images_to_manage
 
 # Check and run air-gapped logic
 if [[ $AIR_GAPPED_MODE -eq 1 ]]; then
-    echo "  --- Running air-gapped logic"
+    echo "--- Running air-gapped logic"
     if ! tar -xzf "$IMAGES_FILE" -C "$TEMP_DIR"; then
       echo "Error: Failed to extract the .tar.gz archive. Please ensure it is a valid tar.gz file."
       exit 1
@@ -376,7 +376,7 @@ if [[ $AIR_GAPPED_MODE -eq 1 ]]; then
         echo "Error: The extracted archive did not contain the expected images 'tar.gz' or a manifest '.txt' file."
         exit 1
     fi
-    echo "Loading images from '$TAR_IMAGE_FILE_IN_ARCHIVE'..."
+    echo "  Loading images from '$TAR_IMAGE_FILE_IN_ARCHIVE'..."
     if ! docker load -i "$TAR_IMAGE_FILE_IN_ARCHIVE" &> /dev/null; then
         echo "Error: Failed to load images from the tar archive."
         exit 1
@@ -389,20 +389,20 @@ if [[ $AIR_GAPPED_MODE -eq 1 ]]; then
 # Run remaining logic
 elif [[ $SAVE_MODE -eq 1 || $PUSH_MODE -eq 1 || $KEEP_MODE -eq 1 ]]; then
     readarray -t images_to_manage < <(grep -vE '^\s*#|^\s*$' "$IMAGES_FILE")
-    echo "  --- Starting image pull process"
+    echo "--- Starting image pull process"
     failed_pulls=()
     for image in "${images_to_manage[@]}"; do
         pull_successful=false
-        echo "Pulling image: $image"
+        echo "  pulling image: $image"
         if docker pull -q "$image" &> /dev/null; then
-            echo "Successfully pulled from original source."
+            echo "  successfully pulled from original source."
             pull_successful=true
         else
-            echo "Initial pull failed. Retrying with mirror.gcr.io..."
+            echo "  initial pull failed, retrying with mirror.gcr.io..."
             # Construct the mirror image URL
             mirror_image="mirror.gcr.io/$image"
             if docker pull -q "$mirror_image"; then
-                echo "Successfully pulled from mirror.gcr.io. Retagging to '$image'"
+                echo "  successfully pulled from mirror.gcr.io, retagging to '$image'"
                 if docker tag "$mirror_image" "$image" &> /dev/null; then
                     pull_successful=true
                 else
@@ -417,21 +417,21 @@ elif [[ $SAVE_MODE -eq 1 || $PUSH_MODE -eq 1 || $KEEP_MODE -eq 1 ]]; then
         fi
     done
     if [[ ${#failed_pulls[@]} -gt 0 ]]; then
-        echo "  --- Summary of failed pulls"
+        echo "--- Summary of failed pulls"
         for img in "${failed_pulls[@]}"; do
-            echo "Failed: $img"
+            echo "  failed: $img"
         done
         # Exit if any image pull failed, as this is for automation
         echo "Critical: One or more images failed to pull. Exiting."
         exit 1
     fi
-    echo "  --- All images pulled successfully"
+    echo "--- All images pulled successfully"
     # Save images if specified
     if [[ $SAVE_MODE -eq 1 ]]; then
         SAVE_FILE_NAME="container_images_$(date +%Y%m%d_%H%M%S).tar.gz"
-        echo "  --- Saving docker packages"
+        echo "--- Saving docker packages"
         save_docker_packages
-        echo "  --- Saving and compressing images"
+        echo "--- Saving and compressing images"
         mkdir -p "$TEMP_DIR/images"
         docker save "${images_to_manage[@]}" | gzip > "$TEMP_DIR/images/images.tar.gz"
         if [[ $? -ne 0 ]]; then
@@ -440,7 +440,7 @@ elif [[ $SAVE_MODE -eq 1 || $PUSH_MODE -eq 1 || $KEEP_MODE -eq 1 ]]; then
         fi
         # Copy the original images list file to the temporary directory
         cp "$IMAGES_FILE" "$TEMP_DIR/images/manifest.txt"
-        echo "  --- Creating image_pull_push archive '$SAVE_FILE_NAME'"
+        echo "--- Creating image_pull_push archive '$SAVE_FILE_NAME'"
         tar -czf "$SAVE_FILE_NAME" -C "$TEMP_DIR" "images" "offline-packages.tar.gz" "install_packages.sh"
         if [[ $? -ne 0 ]]; then
             echo "Error: Failed to create the final tar.gz archive."
@@ -454,7 +454,7 @@ fi
 
 # Push images if specified
 if [[ $PUSH_MODE -eq 1 ]]; then
-    echo "  --- Starting image push process"
+    echo "--- Starting image push process"
     # Check if a manifest exists to push images from
     if [[ ${#images_to_manage[@]} -eq 0 ]]; then
         echo "Error: No images found to push. Check your input file or manifest."
@@ -478,14 +478,14 @@ if [[ $PUSH_MODE -eq 1 ]]; then
         fi
         # Construct the new tag using the target registry and the extracted path
         new_tag="$REGISTRY_URL/$image_path_and_tag"
-        echo "tagging '$image' as '$new_tag'"
+        echo "  tagging '$image' as '$new_tag'"
         if ! docker tag "$image" "$new_tag" &> /dev/null; then
             echo "Error: Failed to tag image '$image'. Skipping push for this image."
             failed_pushes+=("$image")
             continue
         fi
         # Push the tagged image
-        echo "pushing '$new_tag' to registry"
+        echo "  pushing '$new_tag' to registry"
         if ! docker push -q "$new_tag" &> /dev/null; then
             echo "Error: Failed to push image '$new_tag'. Skipping."
             failed_pushes+=("$image")
@@ -497,19 +497,19 @@ if [[ $PUSH_MODE -eq 1 ]]; then
         fi
     done
     if [[ ${#failed_pushes[@]} -gt 0 ]]; then
-        echo "  --- Summary of failed pushes"
+        echo "--- Summary of failed pushes"
         for img in "${failed_pushes[@]}"; do
-            echo "failed to push: $img"
+            echo "  failed to push: $img"
         done
         echo "Warning: One or more images failed to push."
         exit 1
     fi
-    echo "  --- All images pushed successfully"
+    echo "--- All images pushed successfully"
 fi
 
 # Delete local images only if push was successful AND keep was NOT specified
 if [[ $PUSH_MODE -eq 1 ]] && [[ ${#images_to_manage[@]} -gt 0 ]] && [[ ${#failed_pushes[@]} -eq 0 ]] && [[ $KEEP_MODE -eq 0 ]]; then
-    echo "  --- Deleting local images"
+    echo "--- Deleting local images"
     if ! docker rmi "${images_to_manage[@]}" &> /dev/null; then
         echo "Warning: Could not delete all local images. Some may still exist."
     fi
