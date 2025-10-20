@@ -42,7 +42,7 @@ Parameters:
     [save]           : Saves images and manifest to a single tar.gz
     [push]           : Pushes images to a specified registry
     [docker]         : Install docker then exits
-    [reg-cert]       : Installs egistry certificate then exits
+    [reg-cert]       : Installs registry certificate then exits
   Options:           
     <registry:port>  : Target registry FQDN/IP and port. Required with [push] or [reg-cert]
     <username>       : Target registry username. Required with [push]
@@ -244,7 +244,6 @@ login_to_registry() {
 # Check if the script is running with root privileges
 if [[ $EUID -ne 0 ]]; then
     echo "Error: This script must be run with sudo or as root."
-    usage
 fi
 
 # Verify Operating System
@@ -303,6 +302,12 @@ while [[ $# -gt 0 ]]; do
             ;;
     esac
 done
+
+# Check that a command was passed
+if [[  && $PUSH_MODE -eq 0  && $KEEP_MODE -eq 0 && $SAVE_MODE -eq 0 && $DOCKER_MODE -eq 0 && $REG_CERT_MODE -eq 0 ]]; then
+    echo "Error: No command specified."
+    usage
+fi
 
 # Check if the images file path was provided
 if [[ $DOCKER_MODE -eq 0 && $REG_CERT_MODE -eq 0 ]]; then
