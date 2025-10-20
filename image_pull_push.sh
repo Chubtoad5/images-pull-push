@@ -29,36 +29,37 @@ os_id=""
 # --- Helper Functions ---
 
 # Function to display a usage message
+# Usage: $SCRIPT_NAME -f [path_to_images_or_manifest_file] [keep] [save] [push <registry:port> [<username> <password>]]
 usage() {
     cat << EOF
-Usage: $SCRIPT_NAME -f <path_to_images_or_manifest_file> [keep] [save] [push <registry:port> [<username> <password>]]
-
-This script must be run with root privileges.
+Usage: $SCRIPT_NAME -f <file_path> [command] <option>
 
 Parameters:
-  -f <path_to_images_file>   : Path to the file containing a list of container images and tags (one per line).
-                               Alternatively, this can be a .tar.gz file created by this script for air-gapped mode.
-  <keep>                     : Optional. If specified, the script will NOT delete the images from the local Docker daemon at the end.
-  <save>                     : Optional. If specified, saves the images and manifest to a .tar.gz file.
-  <push>                     : Optional. Pushes the images to a specified registry after saving.
-  <docker>                   :  If specified will install docker then exit
-  <reg-cert>                 :  If specified will install registry certificate then exit. Requires <registry:port> to be specified
-  <registry:port>            : Required when <push> or <reg-cert> is specified. The target registry URL and port.
-  <username>                 : Optional. The username for the registry.
-  <password>                 : Optional. Required when <username> is specified. The password for the registry.
+  -f <file_path>     : File path containing names tags of container images (one per line)
+                         Alternate: A .tar.gz file created by this script (air-gapped mode)
+  Commands:
+    [keep]           : Pulls images locally
+    [save]           : Saves images and manifest to a single tar.gz
+    [push]           : Pushes images to a specified registry
+    [docker]         : Install docker then exits
+    [reg-cert]       : Installs egistry certificate then exits
+  Options:           
+    <registry:port>  : Target registry FQDN/IP and port. Required with [push] or [reg-cert]
+    <username>       : Target registry username. Required with [push]
+    <password>       : Target registry password. Required with [push]
 
-Example:
+Examples:
   Pull and save images:
-  sudo ./$SCRIPT_NAME -f my_images.txt save
+    sudo ./$SCRIPT_NAME -f my_images.txt save
 
   Pull, save, and push to a registry:
-  sudo ./$SCRIPT_NAME -f my_images.txt save push my-registry.com:5000
+    sudo ./$SCRIPT_NAME -f my_images.txt save push my-registry.com:5000
 
   Load images from a local file and push (air-gapped):
-  sudo ./$SCRIPT_NAME -f container_images_...tar.gz push my-registry.com:5000
+    sudo ./$SCRIPT_NAME -f container_images_...tar.gz push my-registry.com:5000
 
   Load images from a local file and keep them without pushing:
-  sudo ./$SCRIPT_NAME -f container_images_...tar.gz keep
+    sudo ./$SCRIPT_NAME -f container_images_...tar.gz keep
 EOF
     exit 1
 }
