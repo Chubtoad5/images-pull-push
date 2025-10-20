@@ -81,6 +81,15 @@ trap cleanup EXIT
 # Function to perform validation checks
 validate_prerequisites() {
     echo "--- Validating prerequisites"
+    # Store the list of image names to be managed
+    declare -a images_to_manage
+    if [[ $AIR_GAPPED_MODE -eq 0 ]]; then
+        readarray -t images_to_manage < <(grep -vE '^\s*#|^\s*$' "$IMAGES_FILE")
+        if [[ ${#images_to_manage[@]} -eq 0 ]]; then
+            echo "Error: The manifest file $$IMAGES_FILE is empty or does not contain valid image names."
+            exit 1
+        fi
+    fi
     # Create a temporary directory for intermediate files
     TEMP_DIR=$(mktemp -d -t image-pull-push-XXXXXXXX)
     CLEANUP_REQUIRED=1
@@ -360,9 +369,6 @@ echo "  OS: $os_id"
 # Run preflight checks
 validate_prerequisites
 
-# Store the list of image names to be managed
-declare -a images_to_manage
-
 # Check and run air-gapped logic
 if [[ $AIR_GAPPED_MODE -eq 1 ]]; then
     echo "--- Running air-gapped logic"
@@ -388,7 +394,6 @@ if [[ $AIR_GAPPED_MODE -eq 1 ]]; then
     fi
 # Run remaining logic
 elif [[ $SAVE_MODE -eq 1 || $PUSH_MODE -eq 1 || $KEEP_MODE -eq 1 ]]; then
-    readarray -t images_to_manage < <(grep -vE '^\s*#|^\s*$' "$IMAGES_FILE")
     echo "--- Starting image pull process"
     failed_pulls=()
     for image in "${images_to_manage[@]}"; do
