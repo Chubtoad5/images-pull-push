@@ -30,7 +30,6 @@ declare -a images_to_manage
 # --- Helper Functions ---
 
 # Function to display a usage message
-# Usage: $SCRIPT_NAME -f [path_to_images_or_manifest_file] [keep] [save] [push <registry:port> [<username> <password>]]
 usage() {
     cat << EOF
 Usage: $SCRIPT_NAME -f <file_path> [command] <option>
@@ -237,6 +236,9 @@ install_registry_cert() {
             echo "Error: Failed to update CA trust store. Please check the command output."
             exit 1
         fi
+    if command -v docker &> /dev/null; then
+      systemctl restart docker
+    fi
     else
         echo "Error: Failed to retrieve certificate from '$REGISTRY_URL'. Please ensure the registry is accessible and the port is correct."
         exit 1
