@@ -236,9 +236,9 @@ install_registry_cert() {
             echo "Error: Failed to update CA trust store. Please check the command output."
             exit 1
         fi
-    if command -v docker &> /dev/null; then
-      systemctl restart docker
-    fi
+        if command -v docker &> /dev/null; then
+            systemctl restart docker
+        fi
     else
         echo "Error: Failed to retrieve certificate from '$REGISTRY_URL'. Please ensure the registry is accessible and the port is correct."
         exit 1
