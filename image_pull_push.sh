@@ -82,32 +82,7 @@ trap cleanup EXIT
 # Function to perform validation checks
 validate_prerequisites() {
     echo "--- Validating prerequisites"
-    # Store the list of image names to be managed
-    if [[ $AIR_GAPPED_MODE -eq 0 ]]; then
-        readarray -t images_to_manage < <(grep -vE '^\s*#|^\s*$' "$IMAGES_FILE")
-        if [[ ${#images_to_manage[@]} -eq 0 ]]; then
-            echo "Error: The manifest file $IMAGES_FILE is empty or does not contain valid image names."
-            exit 1
-        fi
-    fi
-    # Create a temporary directory for intermediate files
-    TEMP_DIR=$(mktemp -d -t image-pull-push-XXXXXXXX)
-    CLEANUP_REQUIRED=1
-    echo "  Created temporary directory: $TEMP_DIR"
-    # Check for Docker
-    if [[ $REG_CERT_MODE -eq 0 ]]; then
-        if ! command -v docker &> /dev/null; then
-            install_docker
-        else
-            echo "  Docker CLI found."
-        fi
-        if [[ $DOCKER_MODE -eq 1 ]]; then
-            echo "  Docker installed"
-            echo "### Image Pull Push ended at $(date) ###"
-            exit 0
-        fi
-    fi
-    # If push is enabled, get registry certificate
+    # If push or reg cert mode is enabled, get registry certificate
     if [[ $PUSH_MODE -eq 1 || $REG_CERT_MODE -eq 1 ]]; then
         # Check for OpenSSL
         if ! command -v openssl &> /dev/null; then
@@ -121,6 +96,31 @@ validate_prerequisites() {
         echo "### Image Pull Push ended at $(date) ###"
         exit 0
     fi
+    # Check for Docker
+    if [[ $REG_CERT_MODE -eq 0 ]]; then
+        if ! command -v docker &> /dev/null; then
+            install_docker
+        else
+            echo "  Docker CLI found."
+        fi
+        if [[ $DOCKER_MODE -eq 1 ]]; then
+            echo "  Docker installed"
+            echo "### Image Pull Push ended at $(date) ###"
+            exit 0
+        fi
+    fi
+    # Store the list of image names to be managed
+    if [[ $AIR_GAPPED_MODE -eq 0 ]]; then
+        readarray -t images_to_manage < <(grep -vE '^\s*#|^\s*$' "$IMAGES_FILE")
+        if [[ ${#images_to_manage[@]} -eq 0 ]]; then
+            echo "Error: The manifest file $IMAGES_FILE is empty or does not contain valid image names."
+            exit 1
+        fi
+    fi
+    # Create a temporary directory for intermediate files
+    TEMP_DIR=$(mktemp -d -t image-pull-push-XXXXXXXX)
+    CLEANUP_REQUIRED=1
+    echo "  Created temporary directory: $TEMP_DIR"
 }
 
 os_type() {
