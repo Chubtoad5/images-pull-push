@@ -25,7 +25,7 @@ user_name=${SUDO_USER:-$(whoami)}
 DOCKER_BRIDGE_CIDR=${DOCKER_BRIDGE_CIDR:-"172.30.0.1/16"}
 DOCKER_PACKAGES=(docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin)
 os_id=""
-declare -a images_to_manage
+images_to_manage=()
 
 # --- Helper Functions ---
 
