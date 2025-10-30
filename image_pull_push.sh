@@ -169,6 +169,9 @@ add_docker_repo () {
         fedora)
             dnf-3 config-manager --add-repo https://download.docker.com/linux/fedora/docker-ce.repo
             ;;
+        sles|opensuse-leap)
+            DOCKER_PACKAGES=(docker)
+            ;;
         *)
             echo "Error: Unsupported OS '$os_id'. Manual install of Docker required."
             rm -rf /etc/docker
