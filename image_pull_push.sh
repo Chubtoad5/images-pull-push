@@ -223,8 +223,8 @@ install_registry_cert() {
             update_cmd="update-ca-trust extract"
             ;;
         sles|opensuse-leap)
-            cert_path="/etc/pki/ca-trust/source/anchors/$registry_hostname.crt"
-            update_cmd="update-ca-trust extract"
+            cert_path="/etc/pki/trust/anchors/$registry_hostname.crt"
+            update_cmd="update-ca-certificates"
             ;;
         *)
             echo "Error: Unsupported OS '$os_id'. Manual certificate installation may be required."
