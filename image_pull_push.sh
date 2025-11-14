@@ -196,6 +196,7 @@ install_docker() {
         rm -rf /etc/docker
         exit 1
     fi
+    systemctl enable --now docker || true
     usermod -aG docker $user_name
 }
 
