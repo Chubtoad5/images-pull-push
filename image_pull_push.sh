@@ -88,8 +88,9 @@ validate_prerequisites() {
     echo "  Created temporary directory: $TEMP_DIR"
     if [[ $AIR_GAPPED_MODE -eq 1 ]]; then
         if ! tar -xzf "$IMAGES_FILE" -C "$TEMP_DIR"; then
-      echo "Error: Failed to extract the .tar.gz archive. Please ensure it is a valid tar.gz file."
-      exit 1
+          echo "Error: Failed to extract the .tar.gz archive. Please ensure it is a valid tar.gz file."
+          exit 1
+        fi
     fi
     # If push or reg cert mode is enabled, get registry certificate
     if [[ $PUSH_MODE -eq 1 || $REG_CERT_MODE -eq 1 ]]; then
