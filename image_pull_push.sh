@@ -82,6 +82,15 @@ trap cleanup EXIT
 # Function to perform validation checks
 validate_prerequisites() {
     echo "--- Validating prerequisites"
+    # Create a temporary directory for intermediate files
+    TEMP_DIR=$(mktemp -d -t image-pull-push-XXXXXXXX)
+    CLEANUP_REQUIRED=1
+    echo "  Created temporary directory: $TEMP_DIR"
+    if [[ $AIR_GAPPED_MODE -eq 1 ]]; then
+        if ! tar -xzf "$IMAGES_FILE" -C "$TEMP_DIR"; then
+      echo "Error: Failed to extract the .tar.gz archive. Please ensure it is a valid tar.gz file."
+      exit 1
+    fi
     # If push or reg cert mode is enabled, get registry certificate
     if [[ $PUSH_MODE -eq 1 || $REG_CERT_MODE -eq 1 ]]; then
         # Check for OpenSSL
@@ -117,10 +126,6 @@ validate_prerequisites() {
             exit 1
         fi
     fi
-    # Create a temporary directory for intermediate files
-    TEMP_DIR=$(mktemp -d -t image-pull-push-XXXXXXXX)
-    CLEANUP_REQUIRED=1
-    echo "  Created temporary directory: $TEMP_DIR"
 }
 
 os_type() {
@@ -345,6 +350,17 @@ if [[ $DOCKER_MODE -eq 0 && $REG_CERT_MODE -eq 0 ]]; then
     fi
 fi
 
+# Check for air-gapped while in docker mode
+if [[ $DOCKER_MODE -eq 1 ]]; then
+    if [[ "$IMAGES_FILE" =~ \.tar\.gz$ ]]; then
+        if [[ ! -s "$IMAGES_FILE" ]]; then
+            echo "Error: Images file '$IMAGES_FILE' is empty."
+            exit 1
+        fi
+        AIR_GAPPED_MODE=1
+    fi
+fi
+
 
 # Validate push parameters
 if [[ $PUSH_MODE -eq 1 || $REG_CERT_MODE -eq 1 ]]; then
@@ -379,10 +395,6 @@ validate_prerequisites
 # Check and run air-gapped logic
 if [[ $AIR_GAPPED_MODE -eq 1 ]]; then
     echo "--- Running air-gapped logic"
-    if ! tar -xzf "$IMAGES_FILE" -C "$TEMP_DIR"; then
-      echo "Error: Failed to extract the .tar.gz archive. Please ensure it is a valid tar.gz file."
-      exit 1
-    fi
     TAR_IMAGE_FILE_IN_ARCHIVE=$(find "$TEMP_DIR/images" -type f -name "*.tar.gz")
     MANIFEST_FILE_IN_ARCHIVE=$(find "$TEMP_DIR/images" -type f -name "*.txt")
     if [[ ! -f "$TAR_IMAGE_FILE_IN_ARCHIVE" || ! -f "$MANIFEST_FILE_IN_ARCHIVE" ]]; then
