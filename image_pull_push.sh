@@ -190,7 +190,9 @@ install_docker() {
     echo "  Installing Docker for $os_id"
     create_bridge_json
     if [[ $AIR_GAPPED_MODE -eq 1 ]]; then
-        $TEMP_DIR/install_packages.sh offline "${DOCKER_PACKAGES[@]}"
+        pushd "$TEMP_DIR" >/dev/null
+        ./install_packages.sh offline "${DOCKER_PACKAGES[@]}"
+        popd >/dev/null
     else
         add_docker_repo
         curl -fsSL https://github.com/Chubtoad5/install-packages/raw/refs/heads/main/install_packages.sh -o $TEMP_DIR/install_packages.sh
