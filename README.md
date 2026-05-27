@@ -7,6 +7,47 @@ Script to pull, push, and save container images dynamically using Docker
 - Great for airgapped environment preparation
 - Easily integrate with existing automation
 
+## Quick Start
+
+New here? `image_pull_push.sh` mirrors a list of container images into **your own** registry (or saves
+them to a tarball for air-gapped transfer), preserving each image's tags automatically.
+
+**Prerequisites**
+- A supported OS (Ubuntu/Debian, RHEL family, SLES/openSUSE Leap) and `root` / `sudo`
+- Docker — the script installs it for you if it's missing
+- When pushing: access to your registry, with the target **project paths already created**
+  (e.g. `/library`, `/rancher`, `/longhornio`)
+
+**1. Get the script and write a plain-text image list**
+```bash
+git clone https://github.com/Chubtoad5/images-pull-push.git
+cd images-pull-push
+chmod +x image_pull_push.sh
+
+cat > my_images.txt <<'EOF'
+nginx:latest
+rancher/local-path-provisioner:v0.0.31
+EOF
+```
+
+**2. Pull the images and push them to your registry**
+```bash
+sudo ./image_pull_push.sh -f my_images.txt push my-registry.example.com:443 <username> <password>
+```
+
+Or pull and **save to a tarball** to carry into an air-gapped environment:
+```bash
+sudo ./image_pull_push.sh -f my_images.txt save
+```
+Then, on the air-gapped host, load from that tarball and push — no image list needed, the manifest is
+bundled inside the archive:
+```bash
+sudo ./image_pull_push.sh -f container_images_*.tar.gz push my-registry.example.com:443 <username> <password>
+```
+
+See [Usage](#usage) for every parameter. (`docker` and `reg-cert` are internal helper modes used by
+the other Chubtoad5 tools — you won't normally call them directly.)
+
 ## Getting started
 
 ### Requirements
@@ -16,7 +57,7 @@ Script to pull, push, and save container images dynamically using Docker
 - Sudo or root access
 - Access to an existing container registry when using push
 - Container registry must have the coresponding project path(s) pre-created (i.e /rancher, /library, /longhornio, etc.)
-- The images_pull_push.sh script downloaded, i.e:
+- The image_pull_push.sh script downloaded, i.e:
 ```
 git clone https://github.com/Chubtoad5/images-pull-push.git
 ```
@@ -30,7 +71,7 @@ registry.k8s.io/e2e-test-images/agnhost:2.39
 
 ##  Usage
 ```
-Usage: ./images_pull_push.sh -f <path_to_images_or_manifest_file> [keep] [save] [push <registry:port> [<username> <password>]]
+Usage: ./image_pull_push.sh -f <path_to_images_or_manifest_file> [keep] [save] [push <registry:port> [<username> <password>]]
 
 This script must be run with root privileges.
 
@@ -48,20 +89,20 @@ Parameters:
 ## Examples
 ### Pull and save images:
 ```
-./images_pull_push.sh -f my_images.txt save
+./image_pull_push.sh -f my_images.txt save
 ```
 
 ### Pull, save, and push to a registry:
 ```
-./images_pull_push.sh -f my_images.txt save push my-registry.com:5000 <username> <password>
+./image_pull_push.sh -f my_images.txt save push my-registry.com:5000 <username> <password>
 ```
 
 ### Load images from a local file and push (air-gapped):
 ```
-./images_pull_push.sh -f container_images_...tar.gz push my-registry.com:5000 <username> <password>
+./image_pull_push.sh -f container_images_...tar.gz push my-registry.com:5000 <username> <password>
 ```
 
 ### Load image freom a local file and keep them without pushing
 ```
-./$SCRIPT_NAME -f container_images_...tar.gz keep
+./image_pull_push.sh -f container_images_...tar.gz keep
 ```
