@@ -7,6 +7,17 @@ Script to pull, push, and save container images dynamically using Docker
 - Great for airgapped environment preparation
 - Easily integrate with existing automation
 
+---
+
+## Table of Contents
+
+- [Quick Start](#quick-start)
+- [Getting started](#getting-started)
+- [Usage](#usage)
+- [Examples](#examples)
+
+---
+
 ## Quick Start
 
 New here? `image_pull_push.sh` mirrors a list of container images into **your own** registry (or saves
