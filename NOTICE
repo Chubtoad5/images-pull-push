@@ -1,0 +1,16 @@
+Images Pull/Push
+Copyright (C) 2026 Chubtoad5
+
+Licensed under the Apache License, Version 2.0 (see LICENSE).
+
+This is an original automation script for pulling, saving, and pushing container
+images. It installs and uses the following third-party open-source software (all
+credit to their respective authors):
+
+  Docker / Moby           Apache-2.0   https://github.com/moby/moby
+   incl. containerd.io, buildx, docker-compose-plugin   Apache-2.0
+
+This tool is a generic image mover: it pulls, saves to a tarball, and pushes
+container images that the USER specifies (via a manifest file or `.tar.gz`). The
+licenses of those user-selected images are the user's responsibility — this
+project neither selects nor redistributes any fixed set of images itself.
