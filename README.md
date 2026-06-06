@@ -117,3 +117,18 @@ Parameters:
 ```
 ./image_pull_push.sh -f container_images_...tar.gz keep
 ```
+---
+
+## Upstream / Credits
+
+This project automates the following open-source software; all credit to their authors. See [NOTICE](NOTICE) for
+details.
+
+- Docker / Moby — Apache-2.0
+
+This is a generic image mover: it pulls/saves/pushes whatever images **you** specify; the licenses of those images
+are your responsibility.
+
+## License
+
+Licensed under the **Apache License 2.0** — see [LICENSE](LICENSE) and [NOTICE](NOTICE).
