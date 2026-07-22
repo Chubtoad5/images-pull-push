@@ -340,6 +340,35 @@ install_registry_cert() {
     fi
 }
 
+mirror_fallback_for() {
+    # Prints the mirror.gcr.io fallback reference for a Docker Hub image, or
+    # nothing when the image cannot exist there (mirror.gcr.io only mirrors
+    # Docker Hub). Bare official images need the 'library/' namespace.
+    local image="$1"
+    local first_part="${image%%/*}"
+    local rest=""
+    if [[ "$first_part" == "$image" ]]; then
+        # Bare official image (e.g. 'nginx:latest') -> Docker Hub 'library/'
+        echo "mirror.gcr.io/library/$image"
+        return 0
+    fi
+    if [[ "$first_part" =~ [.:] ]] || [[ "$first_part" == "localhost" ]]; then
+        # Image pinned to an explicit registry
+        if [[ "$first_part" == "docker.io" || "$first_part" == "index.docker.io" || "$first_part" == "registry-1.docker.io" ]]; then
+            rest="${image#*/}"
+            if [[ "$rest" == */* ]]; then
+                echo "mirror.gcr.io/$rest"
+            else
+                echo "mirror.gcr.io/library/$rest"
+            fi
+        fi
+        # Any other registry: no fallback possible, print nothing
+        return 0
+    fi
+    # user/repo form (e.g. 'rancher/local-path-provisioner') -> Docker Hub as-is
+    echo "mirror.gcr.io/$image"
+}
+
 login_to_registry() {
     echo "  Logging in to registry $REGISTRY_URL"
     if [[ -n "$REGISTRY_USER" ]]; then
@@ -512,16 +541,24 @@ elif [[ $SAVE_MODE -eq 1 || $PUSH_MODE -eq 1 || $KEEP_MODE -eq 1 ]]; then
             echo "  successfully pulled from original source."
             pull_successful=true
         else
-            echo "  initial pull failed, retrying with mirror.gcr.io"
-            # Construct the mirror image URL
-            mirror_image="mirror.gcr.io/$image"
-            if docker pull -q "$mirror_image"; then
-                echo "  successfully pulled from mirror.gcr.io, retagging to '$image'"
-                if docker tag "$mirror_image" "$image" &> /dev/null; then
-                    pull_successful=true
-                else
-                    echo "Error: Failed to retag '$mirror_image' to '$image'."
-                    docker rmi "$mirror_image" &> /dev/null || true
+            # Construct the mirror image URL; empty when the image can never
+            # exist on mirror.gcr.io (it only mirrors Docker Hub)
+            mirror_image=$(mirror_fallback_for "$image")
+            if [[ -z "$mirror_image" ]]; then
+                echo "  initial pull failed; not a Docker Hub image, no mirror.gcr.io fallback possible"
+            else
+                echo "  initial pull failed, retrying with $mirror_image"
+                if docker pull -q "$mirror_image" &> /dev/null; then
+                    echo "  successfully pulled from mirror.gcr.io, retagging to '$image'"
+                    if docker tag "$mirror_image" "$image" &> /dev/null; then
+                        pull_successful=true
+                        # Remove the temporary mirror tag created by this run;
+                        # the image remains under its canonical tag
+                        docker rmi "$mirror_image" &> /dev/null || true
+                    else
+                        echo "Error: Failed to retag '$mirror_image' to '$image'."
+                        docker rmi "$mirror_image" &> /dev/null || true
+                    fi
                 fi
             fi
         fi
