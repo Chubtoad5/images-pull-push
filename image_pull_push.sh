@@ -154,6 +154,47 @@ EOF
   echo "  Created /etc/docker/daemon.json with bip: $DOCKER_BRIDGE_CIDR"
 }
 
+select_docker_packages () {
+    # Pick the per-distro docker package list up front so every path (online
+    # install, air-gapped install, and save) uses the correct names. Docker CE
+    # is not published for the SUSE family; the distro 'docker' package is used.
+    case "$os_id" in
+        sles|opensuse-leap)
+            DOCKER_PACKAGES=(docker)
+            ;;
+    esac
+}
+
+ensure_dnf_config_manager () {
+    # 'dnf config-manager' is provided by dnf-plugins-core, which is absent on
+    # minimal images
+    if ! dnf config-manager --help &> /dev/null; then
+        echo "  Installing dnf-plugins-core (provides 'dnf config-manager')"
+        if ! dnf install -y dnf-plugins-core; then
+            echo "Error: Failed to install dnf-plugins-core (required for 'dnf config-manager')."
+            exit 1
+        fi
+    fi
+}
+
+ensure_docker_repo () {
+    # Only (re)add the docker repository when it is not already configured
+    case "$os_id" in
+        ubuntu|debian)
+            [[ -f /etc/apt/sources.list.d/docker.list ]] || add_docker_repo
+            ;;
+        rhel|centos|rocky|almalinux|fedora)
+            [[ -f /etc/yum.repos.d/docker-ce.repo ]] || add_docker_repo
+            ;;
+        sles|opensuse-leap)
+            : # distro repositories already provide the 'docker' package
+            ;;
+        *)
+            add_docker_repo
+            ;;
+    esac
+}
+
 add_docker_repo () {
     echo "  Adding docker repository"
     case "$os_id" in
@@ -169,17 +210,20 @@ add_docker_repo () {
             chmod a+r /etc/apt/keyrings/docker.asc
             echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/debian $(. /etc/os-release && echo "$VERSION_CODENAME") stable" | tee /etc/apt/sources.list.d/docker.list > /dev/null
             ;;
-        rhel|rocky|almalinux)
+        rhel)
+            ensure_dnf_config_manager
             dnf config-manager --add-repo https://download.docker.com/linux/rhel/docker-ce.repo
             ;;
-        centos)
+        rocky|almalinux|centos)
+            # Docker designates the 'centos' repo path for CentOS/Rocky/Alma
+            ensure_dnf_config_manager
             dnf config-manager --add-repo https://download.docker.com/linux/centos/docker-ce.repo
             ;;
         fedora)
             dnf-3 config-manager --add-repo https://download.docker.com/linux/fedora/docker-ce.repo
             ;;
         sles|opensuse-leap)
-            DOCKER_PACKAGES=(docker)
+            : # no Docker CE repo for SUSE; the distro 'docker' package is used
             ;;
         *)
             echo "Error: Unsupported OS '$os_id'. Manual install of Docker required."
@@ -197,10 +241,13 @@ install_docker() {
         ./install_packages.sh offline "${DOCKER_PACKAGES[@]}"
         popd >/dev/null
     else
-        add_docker_repo
-        curl -fsSL https://github.com/Chubtoad5/install-packages/raw/refs/heads/main/install_packages.sh -o $TEMP_DIR/install_packages.sh
-        chmod +x $TEMP_DIR/install_packages.sh
-        $TEMP_DIR/install_packages.sh online "${DOCKER_PACKAGES[@]}"
+        ensure_docker_repo
+        if ! curl -fsSL https://github.com/Chubtoad5/install-packages/raw/refs/heads/main/install_packages.sh -o "$TEMP_DIR/install_packages.sh"; then
+            echo "Error: Failed to download install_packages.sh."
+            exit 1
+        fi
+        chmod +x "$TEMP_DIR/install_packages.sh"
+        "$TEMP_DIR/install_packages.sh" online "${DOCKER_PACKAGES[@]}"
     fi
     if ! command -v docker &> /dev/null; then
         echo "Error: Docker installation failed."
@@ -212,12 +259,31 @@ install_docker() {
 }
 
 save_docker_packages() {
-    if [[ ! -f $TEMP_DIR/install_packages.sh ]]; then
-        curl -fsSL https://github.com/Chubtoad5/install-packages/raw/refs/heads/main/install_packages.sh -o $TEMP_DIR/install_packages.sh
-        chmod +x $TEMP_DIR/install_packages.sh
+    # Saving the docker packages must work regardless of whether docker is
+    # already installed on this host: ensure the docker repo is configured and
+    # verify a usable package archive was actually produced. Never skip
+    # silently — the save archive contract includes offline-packages.tar.gz.
+    ensure_docker_repo
+    if [[ ! -f "$TEMP_DIR/install_packages.sh" ]]; then
+        if ! curl -fsSL https://github.com/Chubtoad5/install-packages/raw/refs/heads/main/install_packages.sh -o "$TEMP_DIR/install_packages.sh"; then
+            echo "Error: Failed to download install_packages.sh."
+            exit 1
+        fi
+        chmod +x "$TEMP_DIR/install_packages.sh"
     fi
-    $TEMP_DIR/install_packages.sh save "${DOCKER_PACKAGES[@]}"
-    mv offline-packages.tar.gz $TEMP_DIR/offline-packages.tar.gz
+    if ! "$TEMP_DIR/install_packages.sh" save "${DOCKER_PACKAGES[@]}"; then
+        echo "Error: install_packages.sh failed to save the docker packages (${DOCKER_PACKAGES[*]})."
+        exit 1
+    fi
+    if [[ ! -s offline-packages.tar.gz ]]; then
+        echo "Error: install_packages.sh did not produce offline-packages.tar.gz. The save archive would be unable to install docker offline."
+        exit 1
+    fi
+    if ! tar -tzf offline-packages.tar.gz 2>/dev/null | grep -qE '\.(deb|rpm)$'; then
+        echo "Error: offline-packages.tar.gz contains no .deb/.rpm packages. Refusing to bundle an unusable docker package archive."
+        exit 1
+    fi
+    mv offline-packages.tar.gz "$TEMP_DIR/offline-packages.tar.gz"
 }
 
 install_registry_cert() {
@@ -295,6 +361,9 @@ fi
 
 # Verify Operating System
 os_type
+
+# Select the per-distro docker package list (applies to every mode)
+select_docker_packages
 
 # Parse command-line parameters
 while [[ $# -gt 0 ]]; do
