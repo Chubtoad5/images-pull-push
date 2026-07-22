@@ -66,6 +66,9 @@ EOF
 
 # Function to handle script exit gracefully
 cleanup() {
+    # Capture the script's real exit status FIRST so the trap's own commands
+    # can never mask a failure with exit 0
+    local rc=$?
     if [[ $CLEANUP_REQUIRED -eq 1 ]]; then
         echo "--- Performing image_pull_push cleanup"
         if [[ -d "$TEMP_DIR" ]]; then
@@ -74,8 +77,8 @@ cleanup() {
             echo "### Image Pull Push ended at $(date) ###"
         fi
     fi
-    # Exit with the last command's status
-    exit $?
+    # Exit with the status the script was exiting with when the trap fired
+    exit "$rc"
 }
 trap cleanup EXIT
 
@@ -273,6 +276,7 @@ login_to_registry() {
 # Check if the script is running with root privileges
 if [[ $EUID -ne 0 ]]; then
     echo "Error: This script must be run with sudo or as root."
+    exit 1
 fi
 
 # Verify Operating System
@@ -460,16 +464,14 @@ elif [[ $SAVE_MODE -eq 1 || $PUSH_MODE -eq 1 || $KEEP_MODE -eq 1 ]]; then
         save_docker_packages
         echo "--- Saving and compressing images"
         mkdir -p "$TEMP_DIR/images"
-        docker save "${images_to_manage[@]}" | gzip > "$TEMP_DIR/images/images.tar.gz"
-        if [[ $? -ne 0 ]]; then
+        if ! docker save "${images_to_manage[@]}" | gzip > "$TEMP_DIR/images/images.tar.gz"; then
             echo "Error: Failed to save or compress images to a tar.gz file."
             exit 1
         fi
         # Copy the original images list file to the temporary directory
         cp "$IMAGES_FILE" "$TEMP_DIR/images/manifest.txt"
         echo "--- Creating image_pull_push archive '$SAVE_FILE_NAME'"
-        tar -czf "$SAVE_FILE_NAME" -C "$TEMP_DIR" "images" "offline-packages.tar.gz" "install_packages.sh"
-        if [[ $? -ne 0 ]]; then
+        if ! tar -czf "$SAVE_FILE_NAME" -C "$TEMP_DIR" "images" "offline-packages.tar.gz" "install_packages.sh"; then
             echo "Error: Failed to create the final tar.gz archive."
             exit 1
         fi
