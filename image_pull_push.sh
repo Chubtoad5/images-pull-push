@@ -26,6 +26,7 @@ DOCKER_BRIDGE_CIDR=${DOCKER_BRIDGE_CIDR:-"172.30.0.1/16"}
 DOCKER_PACKAGES=(docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin)
 os_id=""
 images_to_manage=()
+SAVE_FILE_NAME=""
 
 # --- Helper Functions ---
 
@@ -69,6 +70,11 @@ cleanup() {
     # Capture the script's real exit status FIRST so the trap's own commands
     # can never mask a failure with exit 0
     local rc=$?
+    # Never leave a partially written save archive behind
+    if [[ -n "$SAVE_FILE_NAME" && -f "$SAVE_FILE_NAME.partial" ]]; then
+        rm -f "$SAVE_FILE_NAME.partial" || true
+        echo "  Removed partial save archive: $SAVE_FILE_NAME.partial"
+    fi
     if [[ $CLEANUP_REQUIRED -eq 1 ]]; then
         echo "--- Performing image_pull_push cleanup"
         if [[ -d "$TEMP_DIR" ]]; then
@@ -82,9 +88,48 @@ cleanup() {
 }
 trap cleanup EXIT
 
+# Function to check required commands up front, with a distro install hint
+# (minimal cloud images frequently lack curl)
+require_cmds() {
+    local missing=()
+    local cmd
+    for cmd in "$@"; do
+        if ! command -v "$cmd" &> /dev/null; then
+            missing+=("$cmd")
+        fi
+    done
+    if [[ ${#missing[@]} -gt 0 ]]; then
+        echo "Error: Required command(s) not found: ${missing[*]}"
+        case "$os_id" in
+            ubuntu|debian)
+                echo "  Hint: apt-get update && apt-get install -y ${missing[*]}"
+                ;;
+            rhel|centos|rocky|almalinux|fedora)
+                echo "  Hint: dnf install -y ${missing[*]}"
+                ;;
+            sles|opensuse-leap)
+                echo "  Hint: zypper install -y ${missing[*]}"
+                ;;
+        esac
+        exit 1
+    fi
+}
+
 # Function to perform validation checks
 validate_prerequisites() {
     echo "--- Validating prerequisites"
+    # Preflight: verify the commands this run will need before doing any work
+    local required_cmds=(tar gzip)
+    if [[ $PUSH_MODE -eq 1 || $REG_CERT_MODE -eq 1 ]]; then
+        required_cmds+=(openssl)
+    fi
+    if [[ $AIR_GAPPED_MODE -eq 0 ]]; then
+        # Online mode may need to fetch install_packages.sh / repo keys
+        if [[ $SAVE_MODE -eq 1 ]] || ! command -v docker &> /dev/null; then
+            required_cmds+=(curl)
+        fi
+    fi
+    require_cmds "${required_cmds[@]}"
     # Create a temporary directory for intermediate files
     TEMP_DIR=$(mktemp -d -t image-pull-push-XXXXXXXX)
     CLEANUP_REQUIRED=1
@@ -97,11 +142,6 @@ validate_prerequisites() {
     fi
     # If push or reg cert mode is enabled, get registry certificate
     if [[ $PUSH_MODE -eq 1 || $REG_CERT_MODE -eq 1 ]]; then
-        # Check for OpenSSL
-        if ! command -v openssl &> /dev/null; then
-            echo "Error: openssl is not installed. Please install it with your system's package manager."
-            exit 1
-        fi
         install_registry_cert
     fi
     if [[ $REG_CERT_MODE -eq 1 ]]; then
@@ -122,9 +162,9 @@ validate_prerequisites() {
             exit 0
         fi
     fi
-    # Store the list of image names to be managed
+    # Store the list of image names to be managed (strip CR so CRLF manifests work)
     if [[ $AIR_GAPPED_MODE -eq 0 ]]; then
-        readarray -t images_to_manage < <(grep -vE '^\s*#|^\s*$' "$IMAGES_FILE")
+        readarray -t images_to_manage < <(tr -d '\r' < "$IMAGES_FILE" | grep -vE '^\s*#|^\s*$')
         if [[ ${#images_to_manage[@]} -eq 0 ]]; then
             echo "Error: The manifest file $IMAGES_FILE is empty or does not contain valid image names."
             exit 1
@@ -481,6 +521,12 @@ if [[ $DOCKER_MODE -eq 1 ]]; then
 fi
 
 
+# 'save' requires a text manifest; a .tar.gz input is already a saved archive
+if [[ $SAVE_MODE -eq 1 && $AIR_GAPPED_MODE -eq 1 ]]; then
+    echo "Error: 'save' cannot be used with a .tar.gz archive input. '$IMAGES_FILE' is already a saved archive; use 'keep' or 'push' with it."
+    exit 1
+fi
+
 # Validate push parameters
 if [[ $PUSH_MODE -eq 1 || $REG_CERT_MODE -eq 1 ]]; then
     if [[ -z "$REGISTRY_URL" ]]; then
@@ -514,6 +560,10 @@ validate_prerequisites
 # Check and run air-gapped logic
 if [[ $AIR_GAPPED_MODE -eq 1 ]]; then
     echo "--- Running air-gapped logic"
+    if [[ ! -d "$TEMP_DIR/images" ]]; then
+        echo "Error: The extracted archive does not contain an 'images' directory."
+        exit 1
+    fi
     TAR_IMAGE_FILE_IN_ARCHIVE=$(find "$TEMP_DIR/images" -type f -name "*.tar.gz")
     MANIFEST_FILE_IN_ARCHIVE=$(find "$TEMP_DIR/images" -type f -name "*.txt")
     if [[ ! -f "$TAR_IMAGE_FILE_IN_ARCHIVE" || ! -f "$MANIFEST_FILE_IN_ARCHIVE" ]]; then
@@ -525,7 +575,7 @@ if [[ $AIR_GAPPED_MODE -eq 1 ]]; then
         echo "Error: Failed to load images from the tar archive."
         exit 1
     fi
-    readarray -t images_to_manage < <(grep -vE '^\s*#|^\s*$' "$MANIFEST_FILE_IN_ARCHIVE")
+    readarray -t images_to_manage < <(tr -d '\r' < "$MANIFEST_FILE_IN_ARCHIVE" | grep -vE '^\s*#|^\s*$')
     if [[ ${#images_to_manage[@]} -eq 0 ]]; then
         echo "Error: The manifest file $MANIFEST_FILE_IN_ARCHIVE is empty or does not contain valid image names."
         exit 1
@@ -588,13 +638,17 @@ elif [[ $SAVE_MODE -eq 1 || $PUSH_MODE -eq 1 || $KEEP_MODE -eq 1 ]]; then
             echo "Error: Failed to save or compress images to a tar.gz file."
             exit 1
         fi
-        # Copy the original images list file to the temporary directory
-        cp "$IMAGES_FILE" "$TEMP_DIR/images/manifest.txt"
+        # Copy the original images list (CR-stripped) into the archive manifest
+        tr -d '\r' < "$IMAGES_FILE" > "$TEMP_DIR/images/manifest.txt"
         echo "--- Creating image_pull_push archive '$SAVE_FILE_NAME'"
-        if ! tar -czf "$SAVE_FILE_NAME" -C "$TEMP_DIR" "images" "offline-packages.tar.gz" "install_packages.sh"; then
+        # Write to a temporary name, then rename atomically, so an interrupted
+        # save never leaves a truncated archive matching container_images_*.tar.gz
+        if ! tar -czf "$SAVE_FILE_NAME.partial" -C "$TEMP_DIR" "images" "offline-packages.tar.gz" "install_packages.sh"; then
             echo "Error: Failed to create the final tar.gz archive."
             exit 1
         fi
+        mv "$SAVE_FILE_NAME.partial" "$SAVE_FILE_NAME"
+        echo "  Save archive created: $SAVE_FILE_NAME"
     fi
 else
     echo "Error: No mode specified. Use 'keep', 'save' or 'push'."
