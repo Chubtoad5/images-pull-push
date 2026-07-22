@@ -259,10 +259,12 @@ restore_bridge_json () {
 select_docker_packages () {
     # Pick the per-distro docker package list up front so every path (online
     # install, air-gapped install, and save) uses the correct names. Docker CE
-    # is not published for the SUSE family; the distro 'docker' package is used.
+    # is not published for the SUSE family; the distro 'docker' package is used,
+    # plus 'docker-compose' explicitly - callers (seaweedfs, harbor) need the
+    # compose plugin and the base package is not guaranteed to recommend it.
     case "$os_id" in
         sles|opensuse-leap)
-            DOCKER_PACKAGES=(docker)
+            DOCKER_PACKAGES=(docker docker-compose)
             ;;
     esac
 }
@@ -388,7 +390,9 @@ save_docker_packages() {
         echo "Error: install_packages.sh did not produce offline-packages.tar.gz. The save archive would be unable to install docker offline."
         exit 1
     fi
-    if ! tar -tzf offline-packages.tar.gz 2>/dev/null | grep -qE '\.(deb|rpm)$'; then
+    # grep without -q: -q exits at first match and a large listing then dies of
+    # SIGPIPE under pipefail, turning a good archive into a spurious failure.
+    if ! tar -tzf offline-packages.tar.gz 2>/dev/null | grep -E '\.(deb|rpm)$' >/dev/null; then
         echo "Error: offline-packages.tar.gz contains no .deb/.rpm packages. Refusing to bundle an unusable docker package archive."
         exit 1
     fi
