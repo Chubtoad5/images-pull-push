@@ -27,6 +27,10 @@ DOCKER_PACKAGES=(docker-ce docker-ce-cli containerd.io docker-buildx-plugin dock
 os_id=""
 images_to_manage=()
 SAVE_FILE_NAME=""
+BRIDGE_JSON_CHANGED=0
+BRIDGE_JSON_COMMITTED=0
+BRIDGE_JSON_BACKUP=""
+ETC_DOCKER_CREATED=0
 
 # --- Helper Functions ---
 
@@ -70,6 +74,10 @@ cleanup() {
     # Capture the script's real exit status FIRST so the trap's own commands
     # can never mask a failure with exit 0
     local rc=$?
+    # On failure, revert any /etc/docker/daemon.json change made by this run
+    if [[ $rc -ne 0 ]]; then
+        restore_bridge_json
+    fi
     # Never leave a partially written save archive behind
     if [[ -n "$SAVE_FILE_NAME" && -f "$SAVE_FILE_NAME.partial" ]]; then
         rm -f "$SAVE_FILE_NAME.partial" || true
@@ -185,13 +193,67 @@ os_type() {
 }
 
 create_bridge_json () {
-  mkdir -p /etc/docker
-  cat <<EOF | tee /etc/docker/daemon.json > /dev/null
+  # Merge bip into an existing daemon.json instead of clobbering it, and track
+  # exactly what this run changed so failure paths can revert only that
+  if [[ ! -d /etc/docker ]]; then
+      mkdir -p /etc/docker
+      ETC_DOCKER_CREATED=1
+  fi
+  if [[ -f /etc/docker/daemon.json ]]; then
+      if grep -q '"bip"' /etc/docker/daemon.json; then
+          echo "  Existing /etc/docker/daemon.json already defines \"bip\", leaving it unchanged"
+          return 0
+      fi
+      BRIDGE_JSON_BACKUP="$TEMP_DIR/daemon.json.bak"
+      cp /etc/docker/daemon.json "$BRIDGE_JSON_BACKUP"
+      if command -v jq &> /dev/null; then
+          if ! jq --arg bip "$DOCKER_BRIDGE_CIDR" '. + {bip: $bip}' "$BRIDGE_JSON_BACKUP" > /etc/docker/daemon.json; then
+              cp "$BRIDGE_JSON_BACKUP" /etc/docker/daemon.json
+              echo "Error: Failed to merge bip into existing /etc/docker/daemon.json."
+              exit 1
+          fi
+      elif command -v python3 &> /dev/null; then
+          if ! python3 -c 'import json,sys; p="/etc/docker/daemon.json"; d=json.load(open(p)); d["bip"]=sys.argv[1]; f=open(p,"w"); json.dump(d,f,indent=2); f.write("\n")' "$DOCKER_BRIDGE_CIDR"; then
+              cp "$BRIDGE_JSON_BACKUP" /etc/docker/daemon.json
+              echo "Error: Failed to merge bip into existing /etc/docker/daemon.json."
+              exit 1
+          fi
+      else
+          echo "Warning: /etc/docker/daemon.json exists but neither jq nor python3 is available to merge \"bip\": \"$DOCKER_BRIDGE_CIDR\"."
+          echo "         Leaving the existing file unchanged; set bip manually if a custom docker bridge CIDR is required."
+          BRIDGE_JSON_BACKUP=""
+          return 0
+      fi
+      BRIDGE_JSON_CHANGED=1
+      echo "  Merged bip: $DOCKER_BRIDGE_CIDR into existing /etc/docker/daemon.json"
+  else
+      cat <<EOF | tee /etc/docker/daemon.json > /dev/null
 {
   "bip": "$DOCKER_BRIDGE_CIDR"
 }
 EOF
-  echo "  Created /etc/docker/daemon.json with bip: $DOCKER_BRIDGE_CIDR"
+      BRIDGE_JSON_CHANGED=1
+      echo "  Created /etc/docker/daemon.json with bip: $DOCKER_BRIDGE_CIDR"
+  fi
+}
+
+restore_bridge_json () {
+    # Failure path: revert only what this run changed under /etc/docker.
+    # Never remove /etc/docker wholesale — it can hold other registries'
+    # certs.d and daemon settings this script does not own.
+    if [[ $BRIDGE_JSON_CHANGED -eq 1 && $BRIDGE_JSON_COMMITTED -eq 0 ]]; then
+        if [[ -n "$BRIDGE_JSON_BACKUP" && -f "$BRIDGE_JSON_BACKUP" ]]; then
+            cp "$BRIDGE_JSON_BACKUP" /etc/docker/daemon.json 2>/dev/null || true
+            echo "  Restored previous /etc/docker/daemon.json"
+        else
+            rm -f /etc/docker/daemon.json 2>/dev/null || true
+            echo "  Removed /etc/docker/daemon.json created by this run"
+        fi
+        if [[ $ETC_DOCKER_CREATED -eq 1 ]]; then
+            rmdir /etc/docker 2>/dev/null || true
+        fi
+        BRIDGE_JSON_CHANGED=0
+    fi
 }
 
 select_docker_packages () {
@@ -267,7 +329,6 @@ add_docker_repo () {
             ;;
         *)
             echo "Error: Unsupported OS '$os_id'. Manual install of Docker required."
-            rm -rf /etc/docker
             exit 1
             ;;
     esac
@@ -291,11 +352,19 @@ install_docker() {
     fi
     if ! command -v docker &> /dev/null; then
         echo "Error: Docker installation failed."
-        rm -rf /etc/docker
         exit 1
     fi
-    systemctl enable --now docker || true
-    usermod -aG docker $user_name
+    if ! systemctl enable --now docker; then
+        echo "Error: Failed to enable and start the docker service."
+        exit 1
+    fi
+    if ! systemctl is-active --quiet docker; then
+        echo "Error: The docker service is not active after 'systemctl enable --now docker'."
+        exit 1
+    fi
+    usermod -aG docker "$user_name"
+    # Docker is installed and running: the daemon.json change is now permanent
+    BRIDGE_JSON_COMMITTED=1
 }
 
 save_docker_packages() {
