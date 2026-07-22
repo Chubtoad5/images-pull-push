@@ -243,20 +243,34 @@ install_registry_cert() {
             exit 1
             ;;
     esac
-    echo "  Attempting to retrieve certificate for $registry_hostname:$registry_port"
-    if openssl s_client -showcerts -connect "$registry_hostname:$registry_port" < /dev/null 2>/dev/null | openssl x509 -outform PEM > "$cert_path"; then
-        echo "  Certificate saved to $cert_path"
-        echo "  Updating system certificate store with command: $update_cmd"
-        if ! $update_cmd &> /dev/null; then
-            echo "Error: Failed to update CA trust store. Please check the command output."
-            exit 1
-        fi
-        if command -v docker &> /dev/null; then
-            systemctl restart docker
-        fi
-    else
+    # Fetch to a temp file first so a failed retrieval never leaves an empty
+    # or partial .crt in the trust anchors directory
+    local tmp_cert="$TEMP_DIR/registry-cert.pem"
+    echo "  Attempting to retrieve certificate chain for $registry_hostname:$registry_port"
+    if ! openssl s_client -showcerts -connect "$registry_hostname:$registry_port" < /dev/null 2>/dev/null \
+        | awk '/-----BEGIN CERTIFICATE-----/{incert=1} incert{print} /-----END CERTIFICATE-----/{incert=0}' > "$tmp_cert"; then
         echo "Error: Failed to retrieve certificate from '$REGISTRY_URL'. Please ensure the registry is accessible and the port is correct."
         exit 1
+    fi
+    if ! grep -q -- '-----BEGIN CERTIFICATE-----' "$tmp_cert" || ! openssl x509 -in "$tmp_cert" -noout &> /dev/null; then
+        echo "Error: Did not receive a valid certificate from '$REGISTRY_URL'. Please ensure the registry is accessible and the port is correct."
+        exit 1
+    fi
+    # Only (re)install the certificate and restart docker when the fetched
+    # certificate differs from the one already installed
+    if [[ -s "$cert_path" ]] && cmp -s "$tmp_cert" "$cert_path"; then
+        echo "  Certificate for $registry_hostname already installed and unchanged, skipping trust store update and docker restart"
+        return 0
+    fi
+    cp "$tmp_cert" "$cert_path"
+    echo "  Certificate saved to $cert_path"
+    echo "  Updating system certificate store with command: $update_cmd"
+    if ! $update_cmd &> /dev/null; then
+        echo "Error: Failed to update CA trust store. Please check the command output."
+        exit 1
+    fi
+    if command -v docker &> /dev/null; then
+        systemctl restart docker
     fi
 }
 
@@ -391,7 +405,7 @@ echo "  KEEP IMAGES: $KEEP_MODE"
 echo "  SAVE IMAGES: $SAVE_MODE"
 echo "  REGISTRY URL: $REGISTRY_URL"
 echo "  REGISTRY USER: $REGISTRY_USER"
-echo "  REGISTRY PASS: $REGISTRY_PASS"
+echo "  REGISTRY PASS: ${REGISTRY_PASS:+********}"
 echo "  ONLY ADD CERT: $REG_CERT_MODE"
 echo "  ONLY INSTALL DOCKER: $DOCKER_MODE"
 echo "  OS: $os_id"
