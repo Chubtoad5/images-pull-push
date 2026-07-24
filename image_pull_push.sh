@@ -740,14 +740,19 @@ if [[ $PUSH_MODE -eq 1 ]]; then
     failed_pushes=()
     for image in "${images_to_manage[@]}"; do
         image_path_and_tag=""
-        # Check if the first part of the name looks like a registry
-        first_part=$(echo "$image" | cut -d'/' -f1)
-        if [[ "$first_part" =~ \. ]] || [[ "$first_part" == "localhost" ]]; then
-            # If it's a registry, strip it and use the rest of the path
-            image_path_and_tag=$(echo "$image" | cut -d'/' -f2-)
-        elif [[ "$image" =~ / ]]; then
-            # If it has a path but not a registry (e.g., longhornio/...), use the whole path
-            image_path_and_tag="$image"
+        if [[ "$image" =~ / ]]; then
+            # Check if the first path segment looks like a registry. Only
+            # meaningful when the name has a '/' - on a bare name the "first
+            # segment" is the whole ref, and a dotted TAG (alpine:3.20) would
+            # be mistaken for a hostname, silently skipping the library/ rule.
+            first_part=$(echo "$image" | cut -d'/' -f1)
+            if [[ "$first_part" =~ \. ]] || [[ "$first_part" =~ : ]] || [[ "$first_part" == "localhost" ]]; then
+                # If it's a registry (dot, port, or localhost), strip it
+                image_path_and_tag=$(echo "$image" | cut -d'/' -f2-)
+            else
+                # A path but not a registry (e.g., longhornio/...), use the whole path
+                image_path_and_tag="$image"
+            fi
         else
             # For official Docker Hub images (e.g., 'ubuntu'), prepend 'library/'
             image_path_and_tag="library/$image"
