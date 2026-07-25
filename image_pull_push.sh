@@ -24,7 +24,11 @@ TEMP_DIR=""
 user_name=${SUDO_USER:-$(whoami)}
 DOCKER_BRIDGE_CIDR=${DOCKER_BRIDGE_CIDR:-"172.30.0.1/16"}
 DOCKER_PACKAGES=(docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin)
+# Override to fetch install_packages.sh from a different location (e.g. a
+# feature branch or an internal mirror)
+INSTALL_PACKAGES_URL=${INSTALL_PACKAGES_URL:-"https://github.com/Chubtoad5/install-packages/raw/refs/heads/main/install_packages.sh"}
 os_id=""
+DOCKER_PACKAGES_SAVED=0
 images_to_manage=()
 SAVE_FILE_NAME=""
 BRIDGE_JSON_CHANGED=0
@@ -160,6 +164,15 @@ validate_prerequisites() {
     # Check for Docker
     if [[ $REG_CERT_MODE -eq 0 ]]; then
         if ! command -v docker &> /dev/null; then
+            if [[ $SAVE_MODE -eq 1 ]]; then
+                # Save the docker packages BEFORE installing docker: zypper only
+                # resolves dependencies missing on this host, so saving after the
+                # install produces bundles that cannot install docker on a fresh
+                # SUSE host (P4-02)
+                echo "--- Saving docker packages (before docker is installed)"
+                save_docker_packages
+                DOCKER_PACKAGES_SAVED=1
+            fi
             install_docker
         else
             echo "  Docker CLI found."
@@ -336,6 +349,46 @@ add_docker_repo () {
     esac
 }
 
+ensure_el_kernel_modules () {
+    # EL10 ships the legacy xtables match modules (xt_addrtype et al.) in
+    # kernel-modules-extra, which stock Rocky/Alma/RHEL 10 cloud images omit.
+    # dockerd cannot create its NAT chains without xt_addrtype and never starts (P4-01)
+    case "$os_id" in
+        rhel|centos|rocky|almalinux|fedora) ;;
+        *) return 0 ;;
+    esac
+    if modprobe -n xt_addrtype &>/dev/null; then
+        return 0
+    fi
+    local kver
+    kver=$(uname -r)
+    echo "  Kernel module xt_addrtype is unavailable (the docker daemon requires it)."
+    if [[ $AIR_GAPPED_MODE -eq 1 ]]; then
+        echo "Error: install kernel-modules-extra for the running kernel from local media"
+        echo "  (dnf install kernel-modules-extra-$kver), then re-run this script."
+        exit 1
+    fi
+    echo "  Installing kernel-modules-extra-$kver to match the running kernel..."
+    if ! dnf install -y "kernel-modules-extra-$kver"; then
+        # The running kernel's package has aged out of the repos: install the
+        # latest kernel + modules instead, which only take effect after a reboot
+        echo "  kernel-modules-extra for the running kernel is no longer available;"
+        echo "  installing the latest kernel and kernel-modules-extra..."
+        if ! dnf install -y kernel kernel-modules-extra; then
+            echo "Error: Failed to install kernel-modules-extra. Docker cannot start without the xt_addrtype module."
+            exit 1
+        fi
+        echo "Error: A newer kernel and kernel-modules-extra were installed, but the running kernel"
+        echo "  ($kver) still has no xt_addrtype module. Reboot into the new kernel, then re-run this script."
+        exit 1
+    fi
+    if ! modprobe xt_addrtype; then
+        echo "Error: xt_addrtype still fails to load after installing kernel-modules-extra-$kver."
+        exit 1
+    fi
+    echo "  xt_addrtype kernel module loaded."
+}
+
 install_docker() {
     echo "  Installing Docker for $os_id"
     create_bridge_json
@@ -345,7 +398,7 @@ install_docker() {
         popd >/dev/null
     else
         ensure_docker_repo
-        if ! curl -fsSL https://github.com/Chubtoad5/install-packages/raw/refs/heads/main/install_packages.sh -o "$TEMP_DIR/install_packages.sh"; then
+        if ! curl -fsSL "$INSTALL_PACKAGES_URL" -o "$TEMP_DIR/install_packages.sh"; then
             echo "Error: Failed to download install_packages.sh."
             exit 1
         fi
@@ -356,6 +409,7 @@ install_docker() {
         echo "Error: Docker installation failed."
         exit 1
     fi
+    ensure_el_kernel_modules
     if ! systemctl enable --now docker; then
         echo "Error: Failed to enable and start the docker service."
         exit 1
@@ -376,7 +430,7 @@ save_docker_packages() {
     # silently — the save archive contract includes offline-packages.tar.gz.
     ensure_docker_repo
     if [[ ! -f "$TEMP_DIR/install_packages.sh" ]]; then
-        if ! curl -fsSL https://github.com/Chubtoad5/install-packages/raw/refs/heads/main/install_packages.sh -o "$TEMP_DIR/install_packages.sh"; then
+        if ! curl -fsSL "$INSTALL_PACKAGES_URL" -o "$TEMP_DIR/install_packages.sh"; then
             echo "Error: Failed to download install_packages.sh."
             exit 1
         fi
@@ -703,8 +757,10 @@ elif [[ $SAVE_MODE -eq 1 || $PUSH_MODE -eq 1 || $KEEP_MODE -eq 1 ]]; then
     # Save images if specified
     if [[ $SAVE_MODE -eq 1 ]]; then
         SAVE_FILE_NAME="container_images_$(date +%Y%m%d_%H%M%S).tar.gz"
-        echo "--- Saving docker packages"
-        save_docker_packages
+        if [[ $DOCKER_PACKAGES_SAVED -eq 0 ]]; then
+            echo "--- Saving docker packages"
+            save_docker_packages
+        fi
         echo "--- Saving and compressing images"
         mkdir -p "$TEMP_DIR/images"
         if ! docker save "${images_to_manage[@]}" | gzip > "$TEMP_DIR/images/images.tar.gz"; then
