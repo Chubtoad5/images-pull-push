@@ -15,6 +15,7 @@ Script to pull, push, and save container images dynamically using Docker
 - [Getting started](#getting-started)
 - [Usage](#usage)
 - [Examples](#examples)
+- [Behavior notes](#behavior-notes)
 
 ---
 
@@ -65,6 +66,7 @@ the other Chubtoad5 tools — you won't normally call them directly.)
 - Supported Operating Systems:  ```ubuntu|debian|rhel|centos|rocky|almalinux|fedora|sles|opensuse-leap```
 - Docker engine and CLI
 - Openssl
+- `curl`, `tar`, and `gzip` — checked up front; the script reports anything missing along with the distro's install command
 - Sudo or root access
 - Access to an existing container registry when using push
 - Container registry must have the coresponding project path(s) pre-created (i.e /rancher, /library, /longhornio, etc.)
@@ -118,6 +120,21 @@ Parameters:
 ./image_pull_push.sh -f container_images_...tar.gz keep
 ```
 ---
+
+## Behavior notes
+
+- **Exit codes are truthful.** Any failure exits non-zero; success exits `0`. Safe to call from automation under `set -e`.
+- **Passwords are never printed.** The registry password is masked (`********`) in the runtime-argument display.
+- **Registry certificate handling:** `push`/`reg-cert` fetch the registry's full certificate chain and only update the trust store and restart Docker when the certificate actually changed. Re-running against an unchanged registry does not restart Docker, and a failed retrieval leaves nothing behind in the trust anchors.
+- **`save` always bundles the Docker packages** for the detected distro (Docker CE on Ubuntu/Debian/RHEL family, the distro `docker` package on SLES/openSUSE Leap), even when Docker is already installed on the build host. If the package archive cannot be produced, `save` fails loudly instead of producing an incomplete archive. When Docker is not yet installed on the build host, the packages are saved **before** Docker is installed, so the archive captures Docker's full dependency closure — this matters on SUSE, where zypper only resolves dependencies missing from the build host.
+- **EL10 kernel modules:** on RHEL/Rocky/Alma 10, stock cloud images omit `kernel-modules-extra`, which provides the `xt_addrtype` module the Docker daemon needs for its NAT rules. The installer detects this and installs `kernel-modules-extra` matched to the *running* kernel; if that version has aged out of the repos it installs the latest kernel + modules and exits with an explicit "reboot, then re-run" error instead of leaving a docker that cannot start.
+- **`INSTALL_PACKAGES_URL`** overrides where `install_packages.sh` is fetched from (defaults to the upstream `main` branch) — useful for feature-branch testing or internal mirrors.
+- **Atomic save archives:** the `container_images_*.tar.gz` archive is written under a temporary name and renamed only on success, so an interrupted save never leaves a truncated, valid-looking archive behind.
+- **`save` requires a text manifest** — passing a `.tar.gz` archive together with `save` is an error (the archive is already a saved bundle; use `keep` or `push` with it).
+- **Windows (CRLF) manifests work** — carriage returns are stripped from manifest lines.
+- **mirror.gcr.io fallback:** bare official images fall back as `mirror.gcr.io/library/<name>`; images pinned to a non-Docker-Hub registry (e.g. `registry.k8s.io/...`, `quay.io/...`) skip the fallback, since the mirror only carries Docker Hub content. Temporary mirror tags created by the script are removed after a successful retag.
+- **`/etc/docker/daemon.json` is merged, not overwritten.** When the file already exists, the `bip` (bridge CIDR) setting is merged in via `jq` or `python3`; if neither is available the existing file is left untouched with a warning. An existing `bip` value is always respected. On failure, only the changes made by the current run are reverted — the script never deletes `/etc/docker`.
+- **Rocky/Alma/CentOS** use Docker's designated `centos` repository path, and `dnf-plugins-core` is installed automatically when `dnf config-manager` is missing (minimal images).
 
 ## Upstream / Credits
 
