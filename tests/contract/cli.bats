@@ -95,3 +95,8 @@ H
   grep -q 'reg-cert)' "$SCRIPT"
   grep -q 'docker)' "$SCRIPT"
 }
+@test "still runs when piped to bash" {
+  run bash -c "cat '$BATS_TEST_DIRNAME/../../image_pull_push.sh' | bash -s -- --version"
+  [ "$status" -eq 0 ]
+  [[ "$output" =~ [0-9]+\.[0-9]+\.[0-9]+ ]]
+}
