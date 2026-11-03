@@ -700,7 +700,7 @@ login_to_registry() {
 # --- Main Script Logic --- #
 
 # When sourced by a test harness, stop here: only the functions above are wanted.
-if [[ "${BASH_SOURCE[0]}" != "$0" ]]; then
+if [[ "${BASH_SOURCE[0]:-$0}" != "$0" ]]; then
     return 0
 fi
 
