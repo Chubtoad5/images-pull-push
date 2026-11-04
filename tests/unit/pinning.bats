@@ -53,29 +53,55 @@ setup() {
 }
 @test "PIN_STRICT accepts a bundle whose lock file has every digest" {
   PIN_STRICT=true
+  printf 'alpine:3.20\nbusybox:1.36\n' > "$TEMP_DIR/manifest"
   printf '# image-store: classic\nalpine:3.20\t%s\tsha256:aa\nbusybox:1.36\t%s\tsha256:bb\n' "$D" "$D" > "$TEMP_DIR/lock"
-  run check_bundle_pinned "$TEMP_DIR/lock"
+  run check_bundle_pinned "$TEMP_DIR/lock" "$TEMP_DIR/manifest"
   [ "$status" -eq 0 ]
 }
 @test "PIN_STRICT refuses a bundle with an image that has no digest, and names it" {
   PIN_STRICT=true
+  printf 'alpine:3.20\nbusybox:1.36\n' > "$TEMP_DIR/manifest"
   printf '# image-store: classic\nalpine:3.20\t%s\tsha256:aa\nbusybox:1.36\t-\tsha256:bb\n' "$D" > "$TEMP_DIR/lock"
-  run check_bundle_pinned "$TEMP_DIR/lock"
+  run check_bundle_pinned "$TEMP_DIR/lock" "$TEMP_DIR/manifest"
   [ "$status" -eq 1 ]
   [[ "$output" == *"busybox:1.36 has no digest"* ]]
   [[ "$output" != *"alpine:3.20 has no digest"* ]]
 }
+@test "PIN_STRICT refuses an image the lock file doesn't list" {
+  PIN_STRICT=true
+  printf 'alpine:3.20\nbusybox:1.36\n' > "$TEMP_DIR/manifest"
+  printf '# image-store: classic\nalpine:3.20\t%s\tsha256:aa\n' "$D" > "$TEMP_DIR/lock"
+  run check_bundle_pinned "$TEMP_DIR/lock" "$TEMP_DIR/manifest"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"busybox:1.36 has no digest"* ]]
+}
+@test "PIN_STRICT refuses a lock file with only comments" {
+  PIN_STRICT=true
+  printf 'alpine:3.20\n' > "$TEMP_DIR/manifest"
+  printf '# image-store: classic\n' > "$TEMP_DIR/lock"
+  run check_bundle_pinned "$TEMP_DIR/lock" "$TEMP_DIR/manifest"
+  [ "$status" -eq 1 ]
+}
+@test "PIN_STRICT doesn't take an image ID for a missing digest" {
+  PIN_STRICT=true
+  printf 'alpine:3.20\n' > "$TEMP_DIR/manifest"
+  printf 'alpine:3.20\t\t%s\n' "$D" > "$TEMP_DIR/lock"
+  run check_bundle_pinned "$TEMP_DIR/lock" "$TEMP_DIR/manifest"
+  [ "$status" -eq 1 ]
+}
 @test "PIN_STRICT refuses a bundle with no lock file" {
   PIN_STRICT=true
-  run check_bundle_pinned "$TEMP_DIR/no-such-lock"
+  printf 'alpine:3.20\n' > "$TEMP_DIR/manifest"
+  run check_bundle_pinned "$TEMP_DIR/no-such-lock" "$TEMP_DIR/manifest"
   [ "$status" -eq 1 ]
   [[ "$output" == *"has no lock file"* ]]
 }
 @test "with PIN_STRICT off, a bundle needs neither a lock file nor digests" {
-  run check_bundle_pinned "$TEMP_DIR/no-such-lock"
+  printf 'busybox:1.36\n' > "$TEMP_DIR/manifest"
+  run check_bundle_pinned "$TEMP_DIR/no-such-lock" "$TEMP_DIR/manifest"
   [ "$status" -eq 0 ]
   printf 'busybox:1.36\t-\tsha256:bb\n' > "$TEMP_DIR/lock"
-  run check_bundle_pinned "$TEMP_DIR/lock"
+  run check_bundle_pinned "$TEMP_DIR/lock" "$TEMP_DIR/manifest"
   [ "$status" -eq 0 ]
 }
 @test "the bundle path doesn't apply PIN_STRICT to its plain manifest, and checks before loading anything" {
