@@ -123,7 +123,7 @@ setup() {
   stub docker 'echo 29.9.2'
   run warn_docker_version
   [[ "$output" == *"Warning"* ]]
-  ! called 'install'
+  ! called 'install' || false
   DOCKER_VERSION=29.9
   run warn_docker_version
   [ -z "$output" ]
