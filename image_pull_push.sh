@@ -167,6 +167,27 @@ image_store() {
     fi
 }
 
+# check_bundle_pinned <path>: PIN_STRICT for a bundle. Its manifest is always plain repo:tag, so that an older copy of this
+# script can use it. What pins a bundle is its lock file, so every image needs a digest there.
+check_bundle_pinned() {
+    local lock=$1 image digest id rc=0
+    [[ "${PIN_STRICT,,}" == "true" ]] || return 0
+    if [[ ! -f "$lock" ]]; then
+        echo "Error: PIN_STRICT=true, and this bundle has no lock file, so nothing records what its images are."
+        exit 1
+    fi
+    while IFS=$'\t' read -r image digest id; do
+        [[ -z "$image" || "$image" == \#* ]] && continue
+        if [[ ! "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            echo "Error: PIN_STRICT=true, and $image has no digest in this bundle's lock file."
+            rc=1
+        fi
+    done < "$lock"
+    if [[ $rc -ne 0 ]]; then
+        exit 1
+    fi
+}
+
 # write_lock_file <path>: repo:tag, digest (when known), image ID, tab-separated
 write_lock_file() {
     local image digest id
@@ -879,6 +900,7 @@ if [[ $AIR_GAPPED_MODE -eq 1 ]]; then
         echo "Error: The extracted archive did not contain the expected images 'tar.gz' or a manifest '.txt' file."
         exit 1
     fi
+    check_bundle_pinned "$TEMP_DIR/images/images.lock"
     echo "  Loading images from '$TAR_IMAGE_FILE_IN_ARCHIVE'"
     if ! docker load -i "$TAR_IMAGE_FILE_IN_ARCHIVE" &> /dev/null; then
         echo "Error: Failed to load images from the tar archive."
@@ -889,7 +911,8 @@ if [[ $AIR_GAPPED_MODE -eq 1 ]]; then
         echo "Error: The manifest file $MANIFEST_FILE_IN_ARCHIVE is empty or does not contain valid image names."
         exit 1
     fi
-    normalize_images
+    # check_bundle_pinned has already applied PIN_STRICT, and to the lock file. This manifest is plain on purpose.
+    PIN_STRICT=false normalize_images
     if [[ -f "$TEMP_DIR/images/images.lock" ]]; then
         verify_lock_file "$TEMP_DIR/images/images.lock"
     else

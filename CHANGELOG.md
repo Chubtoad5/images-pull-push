@@ -9,7 +9,8 @@ All of this is optional. A manifest of plain `repo:tag` lines, with no new setti
   it, and it then gets its tag, so the rest of the flow works as usual. A digest with no tag is refused. The
   `mirror.gcr.io` fallback keeps the digest, so a mirror can't substitute a different image.
 - **`lock` command.** It pulls a plain list and writes `images.pinned.txt`, the same list with each digest added.
-- **`PIN_STRICT=true`** refuses any manifest line with no digest. It's off by default.
+- **`PIN_STRICT=true`** refuses any manifest line with no digest. A bundle's manifest stays plain, so for a bundle it reads
+  the lock file instead, and refuses a bundle with no lock file or an image with no digest. It's off by default.
 - **Bundles record what they hold.** `save` adds `images/images.lock` (tag, digest, image ID), and loading a bundle
   checks it. A mismatch fails. A bundle with no lock file gets a note. Image IDs mean different things in Docker's two
   image stores, so a bundle from the other store gets a note instead of a false failure.

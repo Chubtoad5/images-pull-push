@@ -146,6 +146,7 @@ All of this is optional. A plain list of `repo:tag` lines works as it always has
 sudo ./image_pull_push.sh -f images.txt lock            # writes images.pinned.txt
 sudo ./image_pull_push.sh -f images.pinned.txt save
 sudo PIN_STRICT=true ./image_pull_push.sh -f images.pinned.txt keep   # refuse any line with no digest
+sudo PIN_STRICT=true ./image_pull_push.sh -f container_images_*.tar.gz keep   # a bundle: refuse an image with no digest in its lock file
 ```
 
 - A line looks like `repo:tag@sha256:<64 hex>`. A digest with no tag is refused.

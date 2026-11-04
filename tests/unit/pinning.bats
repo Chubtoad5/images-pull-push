@@ -51,6 +51,39 @@ setup() {
   normalize_images
   [ "${images_to_manage[0]}" = "alpine:3.20" ]
 }
+@test "PIN_STRICT accepts a bundle whose lock file has every digest" {
+  PIN_STRICT=true
+  printf '# image-store: classic\nalpine:3.20\t%s\tsha256:aa\nbusybox:1.36\t%s\tsha256:bb\n' "$D" "$D" > "$TEMP_DIR/lock"
+  run check_bundle_pinned "$TEMP_DIR/lock"
+  [ "$status" -eq 0 ]
+}
+@test "PIN_STRICT refuses a bundle with an image that has no digest, and names it" {
+  PIN_STRICT=true
+  printf '# image-store: classic\nalpine:3.20\t%s\tsha256:aa\nbusybox:1.36\t-\tsha256:bb\n' "$D" > "$TEMP_DIR/lock"
+  run check_bundle_pinned "$TEMP_DIR/lock"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"busybox:1.36 has no digest"* ]]
+  [[ "$output" != *"alpine:3.20 has no digest"* ]]
+}
+@test "PIN_STRICT refuses a bundle with no lock file" {
+  PIN_STRICT=true
+  run check_bundle_pinned "$TEMP_DIR/no-such-lock"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"has no lock file"* ]]
+}
+@test "with PIN_STRICT off, a bundle needs neither a lock file nor digests" {
+  run check_bundle_pinned "$TEMP_DIR/no-such-lock"
+  [ "$status" -eq 0 ]
+  printf 'busybox:1.36\t-\tsha256:bb\n' > "$TEMP_DIR/lock"
+  run check_bundle_pinned "$TEMP_DIR/lock"
+  [ "$status" -eq 0 ]
+}
+@test "the bundle path doesn't apply PIN_STRICT to its plain manifest, and checks before loading anything" {
+  grep -n 'PIN_STRICT=false normalize_images' image_pull_push.sh
+  check=$(grep -n 'check_bundle_pinned "\$TEMP_DIR' image_pull_push.sh | cut -d: -f1)
+  load=$(grep -n 'docker load -i "\$TAR_IMAGE_FILE_IN_ARCHIVE"' image_pull_push.sh | cut -d: -f1)
+  [ "$check" -lt "$load" ]
+}
 @test "PIN_STRICT is off by default" {
   [ "$PIN_STRICT" = "false" ]
 }

@@ -53,6 +53,9 @@ store_round() { # store_round <label>
   grep -q 'Verified the loaded images' "$W/o" && ok "$label: lock file verified" || bad "$label: not verified"
   docker image inspect alpine:3.20 >/dev/null 2>&1 && ok "$label: bundle restored the tag" || bad "$label: bundle lost the tag"
   docker rmi -f alpine:3.20 busybox:1.36 >/dev/null 2>&1
+  expect "$label: PIN_STRICT accepts a bundle from a pinned list" env PIN_STRICT=true ./image_pull_push.sh -f "$b" keep
+  docker image inspect alpine:3.20 >/dev/null 2>&1 && ok "$label: and restores the tag" || bad "$label: PIN_STRICT lost the tag"
+  docker rmi -f alpine:3.20 busybox:1.36 >/dev/null 2>&1
   expect "$label: the old script can use a new bundle" ./old.sh -f "$b" keep
   docker image inspect alpine:3.20 >/dev/null 2>&1 && ok "$label: and restores the tag" || bad "$label: the old script lost the tag"
   # A tampered record must fail
@@ -64,6 +67,7 @@ store_round() { # store_round <label>
   docker rmi -f alpine:3.20 busybox:1.36 >/dev/null 2>&1
   expect "$label: an old bundle works, with a note" sh -c "./old.sh -f plain.txt save && ./image_pull_push.sh -f \$(ls container_images_*.tar.gz) keep"
   grep -q 'has no lock file' "$W/o" && ok "$label: it says it can't verify" || bad "$label: no note about the missing lock file"
+  refuse "$label: PIN_STRICT refuses a bundle with no lock file" env PIN_STRICT=true ./image_pull_push.sh -f "$(ls container_images_*.tar.gz)" keep
   rm -f container_images_*.tar.gz
   env PIN_STRICT=true ./image_pull_push.sh -f plain.txt keep >"$W/o" 2>&1 && bad "$label: PIN_STRICT accepted a plain line" || ok "$label: PIN_STRICT refuses a plain line"
   expect "$label: PIN_STRICT accepts a pinned list" env PIN_STRICT=true ./image_pull_push.sh -f images.pinned.txt keep
