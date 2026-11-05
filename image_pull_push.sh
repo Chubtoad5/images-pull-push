@@ -7,11 +7,13 @@ set -o nounset
 set -o pipefail
 
 # --- Global Variables ---
+SCRIPT_VERSION="1.1.0"
 SCRIPT_NAME=$(basename "$0")
 IMAGES_FILE=""
 SAVE_MODE=0
 PUSH_MODE=0
 KEEP_MODE=0
+LOCK_MODE=0
 REG_CERT_MODE=0
 DOCKER_MODE=0
 AIR_GAPPED_MODE=0
@@ -19,17 +21,26 @@ REGISTRY_URL=""
 REGISTRY_USER=""
 REGISTRY_PASS=""
 CLEANUP_REQUIRED=0
-ADD_REG_CERT=0
 TEMP_DIR=""
 user_name=${SUDO_USER:-$(whoami)}
 DOCKER_BRIDGE_CIDR=${DOCKER_BRIDGE_CIDR:-"172.30.0.1/16"}
 DOCKER_PACKAGES=(docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin)
-# Override to fetch install_packages.sh from a different location (e.g. a
-# feature branch or an internal mirror)
-INSTALL_PACKAGES_URL=${INSTALL_PACKAGES_URL:-"https://github.com/Chubtoad5/install-packages/raw/refs/heads/main/install_packages.sh"}
+# Optional Docker versions, used only when Docker isn't installed yet. Empty = newest. The start of a version is enough.
+DOCKER_VERSION=${DOCKER_VERSION:-""}
+CONTAINERD_VERSION=${CONTAINERD_VERSION:-""}
+COMPOSE_VERSION=${COMPOSE_VERSION:-""}
+# Which install_packages.sh to fetch: a tag, branch or commit. INSTALL_PACKAGES_URL wins over the ref
+# (e.g. an internal mirror), and INSTALL_PACKAGES_SHA256 is checked when set.
+INSTALL_PACKAGES_REF=${INSTALL_PACKAGES_REF:-"v1.1.0"}
+INSTALL_PACKAGES_URL=${INSTALL_PACKAGES_URL:-"https://raw.githubusercontent.com/Chubtoad5/install-packages/${INSTALL_PACKAGES_REF}/install_packages.sh"}
+INSTALL_PACKAGES_SHA256=${INSTALL_PACKAGES_SHA256:-""}
+# true = refuse any manifest line that has no digest
+PIN_STRICT=${PIN_STRICT:-"false"}
 os_id=""
 DOCKER_PACKAGES_SAVED=0
 images_to_manage=()
+# repo:tag -> sha256:... for manifest lines pinned by digest
+declare -gA IMAGE_DIGEST=()
 SAVE_FILE_NAME=""
 BRIDGE_JSON_CHANGED=0
 BRIDGE_JSON_COMMITTED=0
@@ -42,13 +53,16 @@ ETC_DOCKER_CREATED=0
 usage() {
     cat << EOF
 Usage: $SCRIPT_NAME -f <file_path> [command] <option>
+       $SCRIPT_NAME --version
 
 Parameters:
-  -f <file_path>     : File path containing names tags of container images (one per line)
+  -f <file_path>     : File path containing names tags of container images (one per line).
+                         A line may pin a digest: repo:tag@sha256:<64 hex>
                          Alternate: A .tar.gz file created by this script (air-gapped mode)
   Commands:
     [keep]           : Pulls images locally
     [save]           : Saves images and manifest to a single tar.gz
+    [lock]           : Pulls images and writes images.pinned.txt, the same list with each digest added
     [push]           : Pushes images to a specified registry
     [docker]         : Install docker then exits
     [reg-cert]       : Installs registry certificate then exits
@@ -69,8 +83,159 @@ Examples:
 
   Load images from a local file and keep them without pushing:
     sudo ./$SCRIPT_NAME -f container_images_...tar.gz keep
+
+  Pin a list of images by digest, then use the pinned list:
+    sudo ./$SCRIPT_NAME -f my_images.txt lock
+    sudo ./$SCRIPT_NAME -f images.pinned.txt save
+
+Environment (all optional):
+  DOCKER_VERSION, CONTAINERD_VERSION, COMPOSE_VERSION : Versions to install when Docker isn't installed yet
+  PIN_STRICT=true        : Refuse any manifest line with no digest
+  INSTALL_PACKAGES_REF   : Tag, branch or commit of install_packages.sh to fetch
+  INSTALL_PACKAGES_URL, INSTALL_PACKAGES_SHA256 : Full URL, and a checksum to verify
 EOF
-    exit 1
+    exit "${1:-1}"
+}
+
+# Fetch install_packages.sh into TEMP_DIR, checking the checksum when one was given
+fetch_install_packages() {
+    if ! curl -fsSL "$INSTALL_PACKAGES_URL" -o "$TEMP_DIR/install_packages.sh"; then
+        echo "Error: Failed to download install_packages.sh from $INSTALL_PACKAGES_URL"
+        exit 1
+    fi
+    if [[ -n "$INSTALL_PACKAGES_SHA256" ]] && ! echo "$INSTALL_PACKAGES_SHA256  $TEMP_DIR/install_packages.sh" | sha256sum -c --status; then
+        echo "Error: install_packages.sh doesn't match INSTALL_PACKAGES_SHA256."
+        exit 1
+    fi
+    chmod +x "$TEMP_DIR/install_packages.sh"
+}
+
+# Split "repo:tag@sha256:..." manifest lines: images_to_manage keeps repo:tag, because the rest of the flow
+# and every consumer work with tags, and the digest goes into IMAGE_DIGEST.
+normalize_images() {
+    local line ref digest out=()
+    for line in "${images_to_manage[@]}"; do
+        if [[ "$line" == *@* ]]; then
+            ref=${line%%@*}
+            digest=${line#*@}
+            if [[ ! "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+                echo "Error: bad digest in manifest line '$line'. Expected sha256: and 64 hex characters."
+                exit 1
+            fi
+            if [[ "${ref##*/}" != *:* ]]; then
+                echo "Error: manifest line '$line' has a digest but no tag. Use repo:tag@sha256:..."
+                exit 1
+            fi
+            IMAGE_DIGEST["$ref"]=$digest
+            out+=("$ref")
+        else
+            if [[ "${PIN_STRICT,,}" == "true" ]]; then
+                echo "Error: PIN_STRICT=true, and manifest line '$line' has no digest. Add one with the 'lock' command."
+                exit 1
+            fi
+            out+=("$line")
+        fi
+    done
+    images_to_manage=("${out[@]}")
+}
+
+# pull_ref <repo:tag>: what to pull. A pinned image is pulled by digest, so Docker verifies it.
+pull_ref() {
+    local image=$1 digest=${IMAGE_DIGEST[$1]:-}
+    if [[ -n "$digest" ]]; then
+        echo "${image%:*}@$digest"
+    else
+        echo "$image"
+    fi
+}
+
+# image_digest <repo:tag>: the registry digest Docker recorded when it pulled this image
+image_digest() {
+    local digests
+    digests=$(docker image inspect --format '{{join .RepoDigests " "}}' "$1" 2>/dev/null) || return 1
+    digests=${digests%% *}
+    [[ "$digests" == *@sha256:* ]] || return 1
+    echo "${digests##*@}"
+}
+
+# image_store: which image store this Docker uses, because it changes what an image ID means
+image_store() {
+    if docker info --format '{{json .DriverStatus}}' 2>/dev/null | grep -q 'io.containerd.snapshotter'; then
+        echo containerd
+    else
+        echo classic
+    fi
+}
+
+# check_bundle_pinned <lock file> <manifest>: PIN_STRICT for a bundle. Its manifest is always plain repo:tag, so that an
+# older copy of this script can use it. What pins a bundle is its lock file, so every image in the manifest needs a digest there.
+check_bundle_pinned() {
+    local lock=$1 manifest=$2 line image digest rc=0
+    [[ "${PIN_STRICT,,}" == "true" ]] || return 0
+    if [[ ! -f "$lock" ]]; then
+        echo "Error: PIN_STRICT=true, and this bundle has no lock file, so nothing records what its images are."
+        exit 1
+    fi
+    while read -r line; do
+        image=${line%%@*}
+        # awk, not read: read collapses an empty tab-separated field, and would take the image ID for the digest.
+        digest=$(awk -F'\t' -v image="$image" '$1 == image { print $2; exit }' "$lock")
+        if [[ ! "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            echo "Error: PIN_STRICT=true, and $image has no digest in this bundle's lock file."
+            rc=1
+        fi
+    done < <(tr -d '\r' < "$manifest" | grep -vE '^\s*#|^\s*$')
+    if [[ $rc -ne 0 ]]; then
+        exit 1
+    fi
+}
+
+# write_lock_file <path>: repo:tag, digest (when known), image ID, tab-separated
+write_lock_file() {
+    local image digest id
+    {
+        echo "# image-store: $(image_store)"
+        for image in "${images_to_manage[@]}"; do
+            digest=${IMAGE_DIGEST[$image]:-}
+            [[ -n "$digest" ]] || digest=$(image_digest "$image" || true)
+            id=$(docker image inspect --format '{{.Id}}' "$image")
+            printf '%s\t%s\t%s\n' "$image" "${digest:--}" "$id"
+        done
+    } > "$1"
+}
+
+# verify_lock_file <path>: after 'docker load', check each image is the one the bundle recorded.
+# Image IDs only compare within one image store, so a bundle from the other store gets a note instead.
+verify_lock_file() {
+    local lock=$1 saved_store here_store image digest id actual rc=0
+    saved_store=$(sed -n 's/^# image-store: //p' "$lock")
+    here_store=$(image_store)
+    if [[ "$saved_store" != "$here_store" ]]; then
+        echo "  Note: this bundle came from Docker's $saved_store image store, and this host uses $here_store. Image IDs can't be compared."
+        return 0
+    fi
+    while IFS=$'\t' read -r image digest id; do
+        [[ -z "$image" || "$image" == \#* ]] && continue
+        actual=$(docker image inspect --format '{{.Id}}' "$image" 2>/dev/null || echo "missing")
+        if [[ "$actual" != "$id" ]]; then
+            echo "Error: $image doesn't match the bundle's record. Expected $id, found $actual."
+            rc=1
+        fi
+    done < "$lock"
+    if [[ $rc -ne 0 ]]; then
+        exit 1
+    fi
+    echo "  Verified the loaded images against the bundle's lock file."
+}
+
+# A Docker that's already there is never moved. Say so when it doesn't match what was asked for.
+warn_docker_version() {
+    [[ -n "$DOCKER_VERSION" ]] || return 0
+    local have
+    have=$(docker version --format '{{.Client.Version}}' 2>/dev/null || true)
+    if [[ "$have" != "$DOCKER_VERSION"* ]]; then
+        echo "  Warning: DOCKER_VERSION=$DOCKER_VERSION, but Docker ${have:-unknown} is already installed. Leaving it as it is."
+    fi
 }
 
 # Function to handle script exit gracefully
@@ -176,6 +341,7 @@ validate_prerequisites() {
             install_docker
         else
             echo "  Docker CLI found."
+            warn_docker_version
         fi
         if [[ $DOCKER_MODE -eq 1 ]]; then
             echo "  Docker installed"
@@ -190,6 +356,7 @@ validate_prerequisites() {
             echo "Error: The manifest file $IMAGES_FILE is empty or does not contain valid image names."
             exit 1
         fi
+        normalize_images
     fi
 }
 
@@ -280,6 +447,19 @@ select_docker_packages () {
             DOCKER_PACKAGES=(docker docker-compose)
             ;;
     esac
+    # Optional pins, in install_packages.sh's name=version form
+    local i pkg version
+    for i in "${!DOCKER_PACKAGES[@]}"; do
+        pkg=${DOCKER_PACKAGES[$i]}
+        case "$pkg" in
+            docker-ce|docker-ce-cli|docker) version=$DOCKER_VERSION ;;
+            containerd.io) version=$CONTAINERD_VERSION ;;
+            docker-compose-plugin|docker-compose) version=$COMPOSE_VERSION ;;
+            *) version="" ;;
+        esac
+        [[ -n "$version" ]] && DOCKER_PACKAGES[i]="$pkg=$version"
+    done
+    return 0
 }
 
 ensure_dnf_config_manager () {
@@ -398,11 +578,7 @@ install_docker() {
         popd >/dev/null
     else
         ensure_docker_repo
-        if ! curl -fsSL "$INSTALL_PACKAGES_URL" -o "$TEMP_DIR/install_packages.sh"; then
-            echo "Error: Failed to download install_packages.sh."
-            exit 1
-        fi
-        chmod +x "$TEMP_DIR/install_packages.sh"
+        fetch_install_packages
         "$TEMP_DIR/install_packages.sh" online "${DOCKER_PACKAGES[@]}"
     fi
     if ! command -v docker &> /dev/null; then
@@ -430,11 +606,7 @@ save_docker_packages() {
     # silently — the save archive contract includes offline-packages.tar.gz.
     ensure_docker_repo
     if [[ ! -f "$TEMP_DIR/install_packages.sh" ]]; then
-        if ! curl -fsSL "$INSTALL_PACKAGES_URL" -o "$TEMP_DIR/install_packages.sh"; then
-            echo "Error: Failed to download install_packages.sh."
-            exit 1
-        fi
-        chmod +x "$TEMP_DIR/install_packages.sh"
+        fetch_install_packages
     fi
     if ! "$TEMP_DIR/install_packages.sh" save "${DOCKER_PACKAGES[@]}"; then
         echo "Error: install_packages.sh failed to save the docker packages (${DOCKER_PACKAGES[*]})."
@@ -454,8 +626,9 @@ save_docker_packages() {
 }
 
 install_registry_cert() {
-    local registry_hostname=$(echo "$REGISTRY_URL" | cut -d':' -f1)
-    local registry_port=$(echo "$REGISTRY_URL" | cut -d':' -f2)
+    local registry_hostname registry_port
+    registry_hostname=$(echo "$REGISTRY_URL" | cut -d':' -f1)
+    registry_port=$(echo "$REGISTRY_URL" | cut -d':' -f2)
     local cert_path=""
     local update_cmd=""
     case "$os_id" in
@@ -549,6 +722,19 @@ login_to_registry() {
 
 # --- Main Script Logic --- #
 
+# When sourced by a test harness, stop here: only the functions above are wanted.
+if [[ "${BASH_SOURCE[0]:-$0}" != "$0" ]]; then
+    return 0
+fi
+
+# These two work for anyone, so they come before the root check
+for arg in "$@"; do
+    case "$arg" in
+        --version) echo "$SCRIPT_VERSION"; exit 0 ;;
+        -h|--help) usage 0 ;;
+    esac
+done
+
 # Check if the script is running with root privileges
 if [[ $EUID -ne 0 ]]; then
     echo "Error: This script must be run with sudo or as root."
@@ -589,6 +775,10 @@ while [[ $# -gt 0 ]]; do
             SAVE_MODE=1
             shift
             ;;
+        lock)
+            LOCK_MODE=1
+            shift
+            ;;
         push)
             PUSH_MODE=1
             shift
@@ -616,7 +806,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 # Check that a command was passed
-if [[ $PUSH_MODE -eq 0 && $KEEP_MODE -eq 0 && $SAVE_MODE -eq 0 && $DOCKER_MODE -eq 0 && $REG_CERT_MODE -eq 0 ]]; then
+if [[ $PUSH_MODE -eq 0 && $KEEP_MODE -eq 0 && $SAVE_MODE -eq 0 && $LOCK_MODE -eq 0 && $DOCKER_MODE -eq 0 && $REG_CERT_MODE -eq 0 ]]; then
     echo "Error: No command specified."
     usage
 fi
@@ -654,6 +844,18 @@ if [[ $SAVE_MODE -eq 1 && $AIR_GAPPED_MODE -eq 1 ]]; then
     exit 1
 fi
 
+# 'lock' needs a text manifest too, and it does nothing else
+if [[ $LOCK_MODE -eq 1 ]]; then
+    if [[ $AIR_GAPPED_MODE -eq 1 ]]; then
+        echo "Error: 'lock' cannot be used with a .tar.gz archive input. It needs a text manifest."
+        exit 1
+    fi
+    if [[ $SAVE_MODE -eq 1 || $PUSH_MODE -eq 1 || $KEEP_MODE -eq 1 ]]; then
+        echo "Error: 'lock' cannot be combined with other commands."
+        exit 1
+    fi
+fi
+
 # Validate push parameters
 if [[ $PUSH_MODE -eq 1 || $REG_CERT_MODE -eq 1 ]]; then
     if [[ -z "$REGISTRY_URL" ]]; then
@@ -670,6 +872,7 @@ fi
 
 # Display runtime arguments
 echo "### Image Pull Push started at $(date) ###"
+echo "  VERSION: $SCRIPT_VERSION"
 echo "  AIR-GAPPED MODE: $AIR_GAPPED_MODE"
 echo "  PUSH IMAGES: $PUSH_MODE"
 echo "  KEEP IMAGES: $KEEP_MODE"
@@ -692,11 +895,14 @@ if [[ $AIR_GAPPED_MODE -eq 1 ]]; then
         exit 1
     fi
     TAR_IMAGE_FILE_IN_ARCHIVE=$(find "$TEMP_DIR/images" -type f -name "*.tar.gz")
+    # Exactly one *.txt may exist in images/, or this breaks in this and older copies of the script.
+    # That's why images.lock and HELPER_VERSION aren't named .txt.
     MANIFEST_FILE_IN_ARCHIVE=$(find "$TEMP_DIR/images" -type f -name "*.txt")
     if [[ ! -f "$TAR_IMAGE_FILE_IN_ARCHIVE" || ! -f "$MANIFEST_FILE_IN_ARCHIVE" ]]; then
         echo "Error: The extracted archive did not contain the expected images 'tar.gz' or a manifest '.txt' file."
         exit 1
     fi
+    check_bundle_pinned "$TEMP_DIR/images/images.lock" "$MANIFEST_FILE_IN_ARCHIVE"
     echo "  Loading images from '$TAR_IMAGE_FILE_IN_ARCHIVE'"
     if ! docker load -i "$TAR_IMAGE_FILE_IN_ARCHIVE" &> /dev/null; then
         echo "Error: Failed to load images from the tar archive."
@@ -707,16 +913,28 @@ if [[ $AIR_GAPPED_MODE -eq 1 ]]; then
         echo "Error: The manifest file $MANIFEST_FILE_IN_ARCHIVE is empty or does not contain valid image names."
         exit 1
     fi
+    # check_bundle_pinned has already applied PIN_STRICT, and to the lock file. This manifest is plain on purpose.
+    PIN_STRICT=false normalize_images
+    if [[ -f "$TEMP_DIR/images/images.lock" ]]; then
+        verify_lock_file "$TEMP_DIR/images/images.lock"
+    else
+        echo "  Note: this bundle has no lock file, so its images can't be verified."
+    fi
 # Run remaining logic
-elif [[ $SAVE_MODE -eq 1 || $PUSH_MODE -eq 1 || $KEEP_MODE -eq 1 ]]; then
+elif [[ $SAVE_MODE -eq 1 || $PUSH_MODE -eq 1 || $KEEP_MODE -eq 1 || $LOCK_MODE -eq 1 ]]; then
     echo "--- Starting image pull process"
     failed_pulls=()
     for image in "${images_to_manage[@]}"; do
         pull_successful=false
-        echo "  pulling image: $image"
-        if docker pull -q "$image" &> /dev/null; then
+        ref=$(pull_ref "$image")
+        echo "  pulling image: $ref"
+        if docker pull -q "$ref" &> /dev/null; then
             echo "  successfully pulled from original source."
-            pull_successful=true
+            if [[ "$ref" == "$image" ]] || docker tag "$ref" "$image" &> /dev/null; then
+                pull_successful=true
+            else
+                echo "Error: Failed to tag '$ref' as '$image'."
+            fi
         else
             # Construct the mirror image URL; empty when the image can never
             # exist on mirror.gcr.io (it only mirrors Docker Hub)
@@ -724,6 +942,10 @@ elif [[ $SAVE_MODE -eq 1 || $PUSH_MODE -eq 1 || $KEEP_MODE -eq 1 ]]; then
             if [[ -z "$mirror_image" ]]; then
                 echo "  initial pull failed; not a Docker Hub image, no mirror.gcr.io fallback possible"
             else
+                # A pinned image stays pinned on the mirror, so the mirror can't substitute a different image
+                if [[ "$ref" != "$image" ]]; then
+                    mirror_image="${mirror_image%:*}@${IMAGE_DIGEST[$image]}"
+                fi
                 echo "  initial pull failed, retrying with $mirror_image"
                 if docker pull -q "$mirror_image" &> /dev/null; then
                     echo "  successfully pulled from mirror.gcr.io, retagging to '$image'"
@@ -754,6 +976,20 @@ elif [[ $SAVE_MODE -eq 1 || $PUSH_MODE -eq 1 || $KEEP_MODE -eq 1 ]]; then
         exit 1
     fi
     echo "--- All images pulled successfully"
+    if [[ $LOCK_MODE -eq 1 ]]; then
+        : > images.pinned.txt
+        for image in "${images_to_manage[@]}"; do
+            digest=${IMAGE_DIGEST[$image]:-}
+            [[ -n "$digest" ]] || digest=$(image_digest "$image") || {
+                echo "Error: Docker has no registry digest for '$image'."
+                exit 1
+            }
+            echo "$image@$digest" >> images.pinned.txt
+        done
+        echo "  Wrote images.pinned.txt"
+        echo "### Image Pull Push ended at $(date) ###"
+        exit 0
+    fi
     # Save images if specified
     if [[ $SAVE_MODE -eq 1 ]]; then
         SAVE_FILE_NAME="container_images_$(date +%Y%m%d_%H%M%S).tar.gz"
@@ -767,8 +1003,11 @@ elif [[ $SAVE_MODE -eq 1 || $PUSH_MODE -eq 1 || $KEEP_MODE -eq 1 ]]; then
             echo "Error: Failed to save or compress images to a tar.gz file."
             exit 1
         fi
-        # Copy the original images list (CR-stripped) into the archive manifest
-        tr -d '\r' < "$IMAGES_FILE" > "$TEMP_DIR/images/manifest.txt"
+        # The manifest stays plain repo:tag lines, so an older copy of this script can still use this bundle.
+        # What each image really is goes in images.lock.
+        printf '%s\n' "${images_to_manage[@]}" > "$TEMP_DIR/images/manifest.txt"
+        write_lock_file "$TEMP_DIR/images/images.lock"
+        echo "$SCRIPT_VERSION" > "$TEMP_DIR/images/HELPER_VERSION"
         echo "--- Creating image_pull_push archive '$SAVE_FILE_NAME'"
         # Write to a temporary name, then rename atomically, so an interrupted
         # save never leaves a truncated archive matching container_images_*.tar.gz
@@ -850,5 +1089,9 @@ if [[ $PUSH_MODE -eq 1 ]] && [[ ${#images_to_manage[@]} -gt 0 ]] && [[ ${#failed
     if ! docker rmi "${images_to_manage[@]}" &> /dev/null; then
         echo "Warning: Could not delete all local images. Some may still exist."
     fi
+    # A pinned image also has a repo@digest reference, which would otherwise keep it alive
+    for image in "${!IMAGE_DIGEST[@]}"; do
+        docker rmi "$(pull_ref "$image")" &> /dev/null || true
+    done
 fi
 exit 0

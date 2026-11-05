@@ -136,6 +136,31 @@ Parameters:
 - **`/etc/docker/daemon.json` is merged, not overwritten.** When the file already exists, the `bip` (bridge CIDR) setting is merged in via `jq` or `python3`; if neither is available the existing file is left untouched with a warning. An existing `bip` value is always respected. On failure, only the changes made by the current run are reverted — the script never deletes `/etc/docker`.
 - **Rocky/Alma/CentOS** use Docker's designated `centos` repository path, and `dnf-plugins-core` is installed automatically when `dnf config-manager` is missing (minimal images).
 
+## Version pinning
+
+All of this is optional. A plain list of `repo:tag` lines works as it always has.
+
+**Pin images by digest.** `lock` pulls a list and writes the same list with each digest added. The result works with every other command:
+
+```bash
+sudo ./image_pull_push.sh -f images.txt lock            # writes images.pinned.txt
+sudo ./image_pull_push.sh -f images.pinned.txt save
+sudo PIN_STRICT=true ./image_pull_push.sh -f images.pinned.txt keep   # refuse any line with no digest
+sudo PIN_STRICT=true ./image_pull_push.sh -f container_images_*.tar.gz keep   # a bundle: refuse an image with no digest in its lock file
+```
+
+- A line looks like `repo:tag@sha256:<64 hex>`. A digest with no tag is refused.
+- A bundle's `images/images.lock` records each image, and loading the bundle checks it. Image IDs can't be compared across Docker's two image stores, so a bundle from the other store gets a note.
+- Pushing a multi-arch image sends only the local platform, so the registry's digest won't match the source. Nothing compares them.
+
+**Pin the Docker engine.** This applies when Docker isn't installed yet, and to `save`. A Docker that's already installed is never moved: it only gets a warning.
+
+```bash
+sudo DOCKER_VERSION=28.5.2 COMPOSE_VERSION=2.30 ./image_pull_push.sh docker
+```
+
+**Pin this script's helper.** `install_packages.sh` is fetched at the tag this version was tested with. Set `INSTALL_PACKAGES_REF` to a tag, branch or commit, `INSTALL_PACKAGES_URL` for a full URL, and `INSTALL_PACKAGES_SHA256` to check it.
+
 ## Upstream / Credits
 
 This project automates the following open-source software; all credit to their authors. See [NOTICE](NOTICE) for

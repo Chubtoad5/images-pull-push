@@ -1,5 +1,36 @@
 # Changelog — images-pull-push
 
+## v1.1.0 — 2026-11-03 — Optional version pinning
+
+All of this is optional. A manifest of plain `repo:tag` lines, with no new settings, behaves as before.
+
+### Added
+- **Digests in manifests.** A line can be `repo:tag@sha256:<64 hex>`. The image is pulled by digest, so Docker verifies
+  it, and it then gets its tag, so the rest of the flow works as usual. A digest with no tag is refused. The
+  `mirror.gcr.io` fallback keeps the digest, so a mirror can't substitute a different image.
+- **`lock` command.** It pulls a plain list and writes `images.pinned.txt`, the same list with each digest added.
+- **`PIN_STRICT=true`** refuses any manifest line with no digest. A bundle's manifest stays plain, so for a bundle it reads
+  the lock file instead, and refuses a bundle with no lock file or an image with no digest. It's off by default.
+- **Bundles record what they hold.** `save` adds `images/images.lock` (tag, digest, image ID), and loading a bundle
+  checks it. A mismatch fails. A bundle with no lock file gets a note. Image IDs mean different things in Docker's two
+  image stores, so a bundle from the other store gets a note instead of a false failure.
+- **`DOCKER_VERSION`, `CONTAINERD_VERSION` and `COMPOSE_VERSION`**, used when Docker isn't installed yet, and by
+  `save`. These need install-packages v1.1.0. A Docker that's already installed is never moved. It only gets a warning.
+- **`INSTALL_PACKAGES_REF`** picks which `install_packages.sh` to fetch, and **`INSTALL_PACKAGES_SHA256`** checks it.
+  `INSTALL_PACKAGES_URL` still works, and wins.
+- **`--version`, and `SCRIPT_VERSION`.** `--version` and `--help` work without root. Each bundle records the version
+  in `images/HELPER_VERSION`.
+- **Tests:** `tests/unit`, `tests/contract` and `tests/integration`.
+
+### Changed
+- `install_packages.sh` now defaults to tag `v1.1.0` rather than `main`. Set `INSTALL_PACKAGES_REF=main` for the old
+  behaviour. **Release install-packages v1.1.0 first,** or the default won't resolve.
+- `images/manifest.txt` in a bundle is now always plain `repo:tag` lines, with comments removed, rather than a copy of
+  the input file. An older copy of this script can still use a new bundle.
+
+### Fixed
+- A pinned line used to fail at `push`, and lost its tag at `keep` and `save`.
+
 ## 2026-09-09 — Idempotence release (feature/idempotence-phase2)
 
 Suite-wide idempotence and correctness pass. `image_pull_push.sh` now reports truthful exit
