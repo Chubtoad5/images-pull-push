@@ -11,15 +11,27 @@ ok()  { echo "PASS  $1"; }
 bad() { echo "FAIL  $1"; fail=1; }
 expect() { local name=$1; shift; if "$@" >"$W/o" 2>&1; then ok "$name"; else bad "$name"; tail -6 "$W/o" | cut -c1-170; fi; }
 refuse() { local name=$1; shift; if "$@" >"$W/o" 2>&1; then bad "$name"; else ok "$name"; fi; }
-apt-get update -qq >/dev/null 2>&1; DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends curl >/dev/null 2>&1
+# Test tools, on whichever package manager this host has. Named the way apt names them, with the other names in the case.
+pkg_install() {
+  if command -v apt-get >/dev/null; then
+    apt-get update -qq >/dev/null 2>&1; DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends "$@" >/dev/null 2>&1
+  elif command -v dnf >/dev/null; then
+    dnf install -y -q "${@/#dnsutils/bind-utils}" >/dev/null 2>&1
+  else
+    zypper -n -q install "${@/#dnsutils/bind-utils}" >/dev/null 2>&1
+  fi
+}
+# The version of Docker's own package: docker-ce from Docker's repos, or docker where the distro packages it.
+docker_pkg() { if command -v dpkg-query >/dev/null; then dpkg-query -W -f='${Version}' docker-ce; else rpm -q --qf '%{VERSION}-%{RELEASE}' docker-ce || rpm -q --qf '%{VERSION}-%{RELEASE}' docker; fi; }
+pkg_install curl openssl
 
 # A real pin on a clean host: the helper resolves 28.5 to the newest 28.5.x build
 expect "DOCKER_VERSION installs that version on a clean host" env DOCKER_VERSION=28.5 COMPOSE_VERSION= ./image_pull_push.sh docker
 docker version --format '{{.Client.Version}}' | grep -q '^28\.5' && ok "Docker is 28.5.x: $(docker version --format '{{.Client.Version}}')" || bad "Docker is $(docker version --format '{{.Client.Version}}')"
-before=$(dpkg-query -W -f='${Version}' docker-ce)
+before=$(docker_pkg)
 expect "a different DOCKER_VERSION on a running host" env DOCKER_VERSION=29 ./image_pull_push.sh docker
 grep -q Warning "$W/o" && ok "it warns" || bad "no warning"
-[ "$(dpkg-query -W -f='${Version}' docker-ce)" = "$before" ] && ok "Docker wasn't moved" || bad "Docker moved"
+[ "$(docker_pkg)" = "$before" ] && ok "Docker wasn't moved" || bad "Docker moved"
 
 openssl req -x509 -newkey rsa:2048 -nodes -days 2 -keyout r.key -out r.crt -subj "/CN=localhost" -addext "subjectAltName=DNS:localhost" 2>/dev/null
 registry() {
@@ -92,7 +104,8 @@ grep -q "can't be compared" "$W/o" && ok "and says the IDs can't be compared" ||
 # A pinned Docker through save
 rm -f container_images_*.tar.gz
 expect "save with DOCKER_VERSION bundles that Docker" env DOCKER_VERSION=28.5 ./image_pull_push.sh -f plain.txt save
-held=$(tar -xzf "$(ls container_images_*.tar.gz)" offline-packages.tar.gz -O | tar -tzf - | grep 'docker-ce_')
-[[ "$held" == *docker-ce_5%3a28.5* ]] && ok "the bundle holds Docker 28.5" || bad "the bundle holds: $held"
+# docker-ce_5%3a28.5.2-1~ubuntu.24.04~noble_amd64.deb, docker-ce-28.5.2-1.el10.x86_64.rpm or docker-28.5.1_ce-160000.1.1.x86_64.rpm
+held=$(tar -xzf "$(ls container_images_*.tar.gz)" offline-packages.tar.gz -O | tar -tzf - | grep -E '(^|/)docker(-ce)?[-_]([0-9]+%3a)?[0-9]')
+grep -qE '[-_]([0-9]+%3a)?28\.5' <<< "$held" && ok "the bundle holds Docker 28.5" || bad "the bundle holds: $held"
 echo "=== exit $fail"
 exit $fail
