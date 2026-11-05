@@ -104,7 +104,8 @@ grep -q "can't be compared" "$W/o" && ok "and says the IDs can't be compared" ||
 # A pinned Docker through save
 rm -f container_images_*.tar.gz
 expect "save with DOCKER_VERSION bundles that Docker" env DOCKER_VERSION=28.5 ./image_pull_push.sh -f plain.txt save
-held=$(tar -xzf "$(ls container_images_*.tar.gz)" offline-packages.tar.gz -O | tar -tzf - | grep 'docker-ce_')
-[[ "$held" == *docker-ce_5%3a28.5* ]] && ok "the bundle holds Docker 28.5" || bad "the bundle holds: $held"
+# docker-ce_5%3a28.5.2-1~ubuntu.24.04~noble_amd64.deb, docker-ce-28.5.2-1.el10.x86_64.rpm or docker-28.5.1_ce-160000.1.1.x86_64.rpm
+held=$(tar -xzf "$(ls container_images_*.tar.gz)" offline-packages.tar.gz -O | tar -tzf - | grep -E '(^|/)docker(-ce)?[-_]([0-9]+%3a)?[0-9]')
+grep -qE '[-_]([0-9]+%3a)?28\.5' <<< "$held" && ok "the bundle holds Docker 28.5" || bad "the bundle holds: $held"
 echo "=== exit $fail"
 exit $fail
