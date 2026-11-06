@@ -1,5 +1,15 @@
 # Changelog — images-pull-push
 
+## v1.1.1 — 2026-11-06 — SUSE bundles hold Docker's dependencies
+
+### Fixed
+- **`save` on SLES and openSUSE, on a host that already has Docker.** The Docker packages in the bundle left out what
+  Docker depends on, such as `catatonit` and `iptables`, so an install from it on a clean host failed. The cause was in
+  `install-packages`, which only fetched what the build host didn't have yet. `INSTALL_PACKAGES_REF` now defaults to its
+  `v1.1.1`, which fetches the whole set. On Leap 16, the Docker packages go from 3 to about 150, about 140 MB.
+
+No option, command or output changed.
+
 ## v1.1.0 — 2026-11-03 — Optional version pinning
 
 All of this is optional. A manifest of plain `repo:tag` lines, with no new settings, behaves as before.
