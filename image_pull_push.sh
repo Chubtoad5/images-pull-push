@@ -7,7 +7,7 @@ set -o nounset
 set -o pipefail
 
 # --- Global Variables ---
-SCRIPT_VERSION="1.1.0"
+SCRIPT_VERSION="1.1.1"
 SCRIPT_NAME=$(basename "$0")
 IMAGES_FILE=""
 SAVE_MODE=0
@@ -31,7 +31,7 @@ CONTAINERD_VERSION=${CONTAINERD_VERSION:-""}
 COMPOSE_VERSION=${COMPOSE_VERSION:-""}
 # Which install_packages.sh to fetch: a tag, branch or commit. INSTALL_PACKAGES_URL wins over the ref
 # (e.g. an internal mirror), and INSTALL_PACKAGES_SHA256 is checked when set.
-INSTALL_PACKAGES_REF=${INSTALL_PACKAGES_REF:-"v1.1.0"}
+INSTALL_PACKAGES_REF=${INSTALL_PACKAGES_REF:-"v1.1.1"}
 INSTALL_PACKAGES_URL=${INSTALL_PACKAGES_URL:-"https://raw.githubusercontent.com/Chubtoad5/install-packages/${INSTALL_PACKAGES_REF}/install_packages.sh"}
 INSTALL_PACKAGES_SHA256=${INSTALL_PACKAGES_SHA256:-""}
 # true = refuse any manifest line that has no digest
