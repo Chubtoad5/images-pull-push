@@ -13,7 +13,7 @@ cp "$REPO/image_pull_push.sh" .; chmod +x image_pull_push.sh
 b=$(ls "$CI_HANDOFF"/container_images_*.tar.gz 2>/dev/null | head -1)
 [ -n "$b" ] && cp "$b" . && ok "put the bundle here" || { bad "no bundle handed on"; echo "=== exit 1"; exit 1; }
 command -v docker >/dev/null && echo "  note: Docker is already on this image"
-./image_pull_push.sh -f "$(basename "$b")" keep > "$W/o" 2>&1 && ok "keep, with no route out" || { bad "keep"; tail -8 "$W/o" | cut -c1-170; }
+./image_pull_push.sh -f "$(basename "$b")" keep > "$W/o" 2>&1 && ok "keep, with no route out" || { bad "keep"; tail -8 "$W/o" | cut -c1-170; echo "  (the checks after it would only fail too)"; echo "=== exit 1"; exit 1; }
 systemctl is-active -q docker && ok "Docker, from the bundle, runs" || bad "Docker isn't running"
 for i in alpine:3.20 busybox:1.36; do docker image inspect "$i" >/dev/null 2>&1 && ok "$i is loaded" || bad "$i isn't loaded"; done
 [ "$(docker run --rm --network none alpine:3.20 echo offline-ok 2>/dev/null)" = offline-ok ] && ok "a loaded image runs" || bad "alpine:3.20 doesn't run"
