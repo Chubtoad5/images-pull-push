@@ -594,7 +594,7 @@ el_modules_extra_pkg() {
     esac
     local pkg
     pkg="kernel-modules-extra-$(uname -r)"
-    if [[ -n "$(dnf -q repoquery "$pkg" 2>/dev/null)" ]]; then
+    if [[ -n "$(dnf -q repoquery --available "$pkg" 2>/dev/null)" ]]; then
         echo "$pkg"
     else
         echo "  Note: $pkg isn't in this host's repos, so the bundle won't carry it. A target that lacks xt_addrtype will need it from local media." >&2
