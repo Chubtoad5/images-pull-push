@@ -1,5 +1,29 @@
 # Changelog — images-pull-push
 
+## v1.1.2 — 2026-11-09 — Air-gapped Docker on Rocky 10's image kernel
+
+### Fixed
+- **An air-gapped install on Rocky, Alma or RHEL 10 no longer stops for `kernel-modules-extra`** (spec 15, F1). Those
+  images leave it out, and the Docker daemon needs its `xt_addrtype`. Online, the installer already installed the
+  running kernel's package. Air-gapped, it stopped and asked for it from local media. Now `save` on an EL host also
+  bundles `kernel-modules-extra-$(uname -r)` when the build host's repos still have it, and an air-gapped install
+  installs it from the bundle when the target runs that same kernel. On another kernel the message names the kernel the
+  bundle was built for, and which package to bring.
+
+- **A Leap 16 Docker bundle installs on a clean host with SELinux enforcing** (spec 15, F7). `INSTALL_PACKAGES_REF` now
+  defaults to `install-packages` v1.1.3, whose SUSE `save` also takes what the build host's packages make required, such as
+  Docker's `container-selinux`. Before, zypper offered to remove the host's SELinux policy, and `keep` stopped.
+
+### Added
+- **`LICENSES/` in a save bundle** (spec 15, Q9): a manifest of the OS packages in `offline-packages.tar.gz`, and a
+  written offer for the GPL and LGPL ones, now that the bundle also carries the kernel's modules on EL and the SELinux
+  policy on SUSE. `LICENSE_OFFER_CONTACT` sets who the offer names. Bundles from older versions don't have it, and any
+  version reads either kind.
+
+### Tests
+- `tests/unit/licences.bats`: what the manifest lists, the offer's contact, and that save archives it.
+- `tests/unit/el-modules.bats`: what `save` adds on EL and elsewhere, reading the bundle, and both air-gapped outcomes.
+
 ## v1.1.1 — 2026-11-06 — SUSE bundles hold Docker's dependencies
 
 ### Fixed

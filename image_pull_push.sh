@@ -7,7 +7,7 @@ set -o nounset
 set -o pipefail
 
 # --- Global Variables ---
-SCRIPT_VERSION="1.1.1"
+SCRIPT_VERSION="1.1.2"
 SCRIPT_NAME=$(basename "$0")
 IMAGES_FILE=""
 SAVE_MODE=0
@@ -31,9 +31,11 @@ CONTAINERD_VERSION=${CONTAINERD_VERSION:-""}
 COMPOSE_VERSION=${COMPOSE_VERSION:-""}
 # Which install_packages.sh to fetch: a tag, branch or commit. INSTALL_PACKAGES_URL wins over the ref
 # (e.g. an internal mirror), and INSTALL_PACKAGES_SHA256 is checked when set.
-INSTALL_PACKAGES_REF=${INSTALL_PACKAGES_REF:-"v1.1.1"}
+INSTALL_PACKAGES_REF=${INSTALL_PACKAGES_REF:-"v1.1.3"}
 INSTALL_PACKAGES_URL=${INSTALL_PACKAGES_URL:-"https://raw.githubusercontent.com/Chubtoad5/install-packages/${INSTALL_PACKAGES_REF}/install_packages.sh"}
 INSTALL_PACKAGES_SHA256=${INSTALL_PACKAGES_SHA256:-""}
+# Who the save bundle's written offer for its GPL/LGPL OS packages tells people to ask for source code
+LICENSE_OFFER_CONTACT=${LICENSE_OFFER_CONTACT:-"the Chubtoad5 project via https://github.com/Chubtoad5"}
 # true = refuse any manifest line that has no digest
 PIN_STRICT=${PIN_STRICT:-"false"}
 os_id=""
@@ -540,33 +542,75 @@ ensure_el_kernel_modules () {
     if modprobe -n xt_addrtype &>/dev/null; then
         return 0
     fi
-    local kver
+    local kver bundled
     kver=$(uname -r)
     echo "  Kernel module xt_addrtype is unavailable (the docker daemon requires it)."
     if [[ $AIR_GAPPED_MODE -eq 1 ]]; then
-        echo "Error: install kernel-modules-extra for the running kernel from local media"
-        echo "  (dnf install kernel-modules-extra-$kver), then re-run this script."
-        exit 1
-    fi
-    echo "  Installing kernel-modules-extra-$kver to match the running kernel..."
-    if ! dnf install -y "kernel-modules-extra-$kver"; then
-        # The running kernel's package has aged out of the repos: install the
-        # latest kernel + modules instead, which only take effect after a reboot
-        echo "  kernel-modules-extra for the running kernel is no longer available;"
-        echo "  installing the latest kernel and kernel-modules-extra..."
-        if ! dnf install -y kernel kernel-modules-extra; then
-            echo "Error: Failed to install kernel-modules-extra. Docker cannot start without the xt_addrtype module."
+        # A bundle built on a host running this same kernel carries its kernel-modules-extra (spec 15, F1)
+        bundled=$(bundled_modules_extra)
+        if [[ "$bundled" == "kernel-modules-extra-$kver" ]]; then
+            echo "  Installing kernel-modules-extra-$kver from the bundle..."
+            pushd "$TEMP_DIR" >/dev/null
+            if ! ./install_packages.sh offline "kernel-modules-extra-$kver"; then
+                popd >/dev/null
+                echo "Error: kernel-modules-extra-$kver from the bundle failed to install."
+                exit 1
+            fi
+            popd >/dev/null
+        else
+            [[ -n "$bundled" ]] && echo "  The bundle carries $bundled, which is for another kernel: it was built on a host running ${bundled#kernel-modules-extra-}."
+            echo "Error: install kernel-modules-extra for the running kernel from local media"
+            echo "  (dnf install kernel-modules-extra-$kver), then re-run this script."
             exit 1
         fi
-        echo "Error: A newer kernel and kernel-modules-extra were installed, but the running kernel"
-        echo "  ($kver) still has no xt_addrtype module. Reboot into the new kernel, then re-run this script."
-        exit 1
+    else
+        echo "  Installing kernel-modules-extra-$kver to match the running kernel..."
+        if ! dnf install -y "kernel-modules-extra-$kver"; then
+            # The running kernel's package has aged out of the repos: install the
+            # latest kernel + modules instead, which only take effect after a reboot
+            echo "  kernel-modules-extra for the running kernel is no longer available;"
+            echo "  installing the latest kernel and kernel-modules-extra..."
+            if ! dnf install -y kernel kernel-modules-extra; then
+                echo "Error: Failed to install kernel-modules-extra. Docker cannot start without the xt_addrtype module."
+                exit 1
+            fi
+            echo "Error: A newer kernel and kernel-modules-extra were installed, but the running kernel"
+            echo "  ($kver) still has no xt_addrtype module. Reboot into the new kernel, then re-run this script."
+            exit 1
+        fi
     fi
     if ! modprobe xt_addrtype; then
         echo "Error: xt_addrtype still fails to load after installing kernel-modules-extra-$kver."
         exit 1
     fi
     echo "  xt_addrtype kernel module loaded."
+}
+
+# el_modules_extra_pkg: on an EL host, the running kernel's kernel-modules-extra when this host's repos still have it, so
+# that a bundle carries it. A target built from the same image then gets xt_addrtype with no local media (spec 15, F1).
+# Prints nothing elsewhere, and a note on stderr when the repos no longer have it.
+el_modules_extra_pkg() {
+    case "$os_id" in
+        rhel|centos|rocky|almalinux|fedora) ;;
+        *) return 0 ;;
+    esac
+    local pkg
+    pkg="kernel-modules-extra-$(uname -r)"
+    if [[ -n "$(dnf -q repoquery --available "$pkg" 2>/dev/null)" ]]; then
+        echo "$pkg"
+    else
+        echo "  Note: $pkg isn't in this host's repos, so the bundle won't carry it. A target that lacks xt_addrtype will need it from local media." >&2
+    fi
+}
+
+# bundled_modules_extra: the kernel-modules-extra package that the bundle's offline-packages.tar.gz carries, as
+# kernel-modules-extra-<kernel>, or nothing
+bundled_modules_extra() {
+    local listing
+    [[ -f "$TEMP_DIR/offline-packages.tar.gz" ]] || return 0
+    listing=$(tar -tzf "$TEMP_DIR/offline-packages.tar.gz" 2>/dev/null) || return 0
+    # tail, not head: head stops reading, and the writer then dies of SIGPIPE under pipefail
+    sed -n 's#^.*/\(kernel-modules-extra-[0-9][^/]*\)\.rpm$#\1#p' <<< "$listing" | tail -n 1
 }
 
 install_docker() {
@@ -608,8 +652,10 @@ save_docker_packages() {
     if [[ ! -f "$TEMP_DIR/install_packages.sh" ]]; then
         fetch_install_packages
     fi
-    if ! "$TEMP_DIR/install_packages.sh" save "${DOCKER_PACKAGES[@]}"; then
-        echo "Error: install_packages.sh failed to save the docker packages (${DOCKER_PACKAGES[*]})."
+    local extra
+    extra=$(el_modules_extra_pkg)
+    if ! "$TEMP_DIR/install_packages.sh" save "${DOCKER_PACKAGES[@]}" ${extra:+"$extra"}; then
+        echo "Error: install_packages.sh failed to save the docker packages (${DOCKER_PACKAGES[*]}${extra:+ $extra})."
         exit 1
     fi
     if [[ ! -s offline-packages.tar.gz ]]; then
@@ -623,6 +669,54 @@ save_docker_packages() {
         exit 1
     fi
     mv offline-packages.tar.gz "$TEMP_DIR/offline-packages.tar.gz"
+}
+
+# generate_bundle_licenses <dir>: LICENSES/ for a save bundle (spec 15, Q9). A manifest of the OS packages in
+# offline-packages.tar.gz, and a written offer for the GPL and LGPL ones: Docker's dependencies, iptables, and on EL the
+# kernel's modules, on SUSE the SELinux policy. The container images are the user's choice, and each carries its own
+# licences inside.
+generate_bundle_licenses() {
+    local dir="$1/LICENSES" pkgs="$1/offline-packages.tar.gz" listing=""
+    mkdir -p "$dir"
+    if [[ -f "$pkgs" ]]; then
+        listing=$(tar -tzf "$pkgs" 2>/dev/null | sed -n 's#^.*/\([^/]*\.\(deb\|rpm\)\)$#  \1#p' | sort) || listing=""
+    fi
+    cat > "$dir/THIRD_PARTY_NOTICES.txt" <<EOF
+Third-party components redistributed in this images-pull-push save bundle
+Generated: $(date -u +%Y-%m-%dT%H:%M:%SZ)
+
+Container images (images/images.tar.gz, listed in images/manifest.txt): the images this
+bundle was asked to save. Each carries its own licence and notices inside the image.
+
+OS packages in offline-packages.tar.gz, for installing Docker with no route out: Docker and
+containerd (Apache-2.0), and what they need on this OS. Each package carries its own licence
+(rpm -q --licensefiles <package>, or /usr/share/doc/<package>/copyright once installed). Some
+are copyleft, for example iptables (GPL-2.0), on RHEL-family hosts the running kernel's
+kernel-modules-extra (GPL-2.0), and on SUSE the SELinux policy packages (GPL-2.0). They are
+covered by WRITTEN_OFFER.txt. The packages:
+${listing:-  (none)}
+
+install_packages.sh and image_pull_push.sh are Apache-2.0 (Chubtoad5).
+EOF
+    cat > "$dir/WRITTEN_OFFER.txt" <<EOF
+WRITTEN OFFER FOR CORRESPONDING SOURCE CODE (GPL, LGPL)
+
+This save bundle redistributes operating system packages in binary form, in
+offline-packages.tar.gz. THIRD_PARTY_NOTICES.txt lists them. Some are licensed under the GNU
+General Public License or the GNU Lesser General Public License.
+
+The distributor of this bundle hereby makes a written offer, valid for three (3) years from the
+date this bundle was created ($(date -u +%Y-%m-%d)), to give any third party who possesses this
+bundle a complete machine-readable copy of the corresponding source code for those packages,
+for a charge no more than the cost of physically performing the source distribution.
+
+The source is also publicly available from the operating system distribution that each package
+came from (for example, apt-get source <package> on Debian and Ubuntu).
+
+To request the source on a physical medium, contact: ${LICENSE_OFFER_CONTACT}
+
+This offer is independent of the Apache-2.0 license covering the scripts themselves.
+EOF
 }
 
 install_registry_cert() {
@@ -1008,10 +1102,11 @@ elif [[ $SAVE_MODE -eq 1 || $PUSH_MODE -eq 1 || $KEEP_MODE -eq 1 || $LOCK_MODE -
         printf '%s\n' "${images_to_manage[@]}" > "$TEMP_DIR/images/manifest.txt"
         write_lock_file "$TEMP_DIR/images/images.lock"
         echo "$SCRIPT_VERSION" > "$TEMP_DIR/images/HELPER_VERSION"
+        generate_bundle_licenses "$TEMP_DIR"
         echo "--- Creating image_pull_push archive '$SAVE_FILE_NAME'"
         # Write to a temporary name, then rename atomically, so an interrupted
         # save never leaves a truncated archive matching container_images_*.tar.gz
-        if ! tar -czf "$SAVE_FILE_NAME.partial" -C "$TEMP_DIR" "images" "offline-packages.tar.gz" "install_packages.sh"; then
+        if ! tar -czf "$SAVE_FILE_NAME.partial" -C "$TEMP_DIR" "images" "offline-packages.tar.gz" "install_packages.sh" "LICENSES"; then
             echo "Error: Failed to create the final tar.gz archive."
             exit 1
         fi
