@@ -10,6 +10,10 @@
   installs it from the bundle when the target runs that same kernel. On another kernel the message names the kernel the
   bundle was built for, and which package to bring.
 
+- **A Leap 16 Docker bundle installs on a clean host with SELinux enforcing** (spec 15, F7). `INSTALL_PACKAGES_REF` now
+  defaults to `install-packages` v1.1.3, whose SUSE `save` also takes what the build host's packages make required, such as
+  Docker's `container-selinux`. Before, zypper offered to remove the host's SELinux policy, and `keep` stopped.
+
 ### Added
 - **`LICENSES/` in a save bundle** (spec 15, Q9): a manifest of the OS packages in `offline-packages.tar.gz`, and a
   written offer for the GPL and LGPL ones, now that the bundle also carries the kernel's modules on EL and the SELinux
