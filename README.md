@@ -161,6 +161,8 @@ sudo DOCKER_VERSION=28.5.2 COMPOSE_VERSION=2.30 ./image_pull_push.sh docker
 
 **Pin this script's helper.** `install_packages.sh` is fetched at the tag this version was tested with. Set `INSTALL_PACKAGES_REF` to a tag, branch or commit, `INSTALL_PACKAGES_URL` for a full URL, and `INSTALL_PACKAGES_SHA256` to check it.
 
+**Licences in a save bundle.** A `save` archive holds `LICENSES/`: a manifest of the OS packages it carries for installing Docker with no route out, and a written offer for the GPL and LGPL ones, such as `iptables`, and on EL the kernel's `kernel-modules-extra`. Set `LICENSE_OFFER_CONTACT` to who the offer tells people to ask (default: the Chubtoad5 project). The saved container images carry their own licences inside.
+
 ## Upstream / Credits
 
 This project automates the following open-source software; all credit to their authors. See [NOTICE](NOTICE) for

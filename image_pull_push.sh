@@ -34,6 +34,8 @@ COMPOSE_VERSION=${COMPOSE_VERSION:-""}
 INSTALL_PACKAGES_REF=${INSTALL_PACKAGES_REF:-"v1.1.1"}
 INSTALL_PACKAGES_URL=${INSTALL_PACKAGES_URL:-"https://raw.githubusercontent.com/Chubtoad5/install-packages/${INSTALL_PACKAGES_REF}/install_packages.sh"}
 INSTALL_PACKAGES_SHA256=${INSTALL_PACKAGES_SHA256:-""}
+# Who the save bundle's written offer for its GPL/LGPL OS packages tells people to ask for source code
+LICENSE_OFFER_CONTACT=${LICENSE_OFFER_CONTACT:-"the Chubtoad5 project via https://github.com/Chubtoad5"}
 # true = refuse any manifest line that has no digest
 PIN_STRICT=${PIN_STRICT:-"false"}
 os_id=""
@@ -669,6 +671,54 @@ save_docker_packages() {
     mv offline-packages.tar.gz "$TEMP_DIR/offline-packages.tar.gz"
 }
 
+# generate_bundle_licenses <dir>: LICENSES/ for a save bundle (spec 15, Q9). A manifest of the OS packages in
+# offline-packages.tar.gz, and a written offer for the GPL and LGPL ones: Docker's dependencies, iptables, and on EL the
+# kernel's modules, on SUSE the SELinux policy. The container images are the user's choice, and each carries its own
+# licences inside.
+generate_bundle_licenses() {
+    local dir="$1/LICENSES" pkgs="$1/offline-packages.tar.gz" listing=""
+    mkdir -p "$dir"
+    if [[ -f "$pkgs" ]]; then
+        listing=$(tar -tzf "$pkgs" 2>/dev/null | sed -n 's#^.*/\([^/]*\.\(deb\|rpm\)\)$#  \1#p' | sort) || listing=""
+    fi
+    cat > "$dir/THIRD_PARTY_NOTICES.txt" <<EOF
+Third-party components redistributed in this images-pull-push save bundle
+Generated: $(date -u +%Y-%m-%dT%H:%M:%SZ)
+
+Container images (images/images.tar.gz, listed in images/manifest.txt): the images this
+bundle was asked to save. Each carries its own licence and notices inside the image.
+
+OS packages in offline-packages.tar.gz, for installing Docker with no route out: Docker and
+containerd (Apache-2.0), and what they need on this OS. Each package carries its own licence
+(rpm -q --licensefiles <package>, or /usr/share/doc/<package>/copyright once installed). Some
+are copyleft, for example iptables (GPL-2.0), on RHEL-family hosts the running kernel's
+kernel-modules-extra (GPL-2.0), and on SUSE the SELinux policy packages (GPL-2.0). They are
+covered by WRITTEN_OFFER.txt. The packages:
+${listing:-  (none)}
+
+install_packages.sh and image_pull_push.sh are Apache-2.0 (Chubtoad5).
+EOF
+    cat > "$dir/WRITTEN_OFFER.txt" <<EOF
+WRITTEN OFFER FOR CORRESPONDING SOURCE CODE (GPL, LGPL)
+
+This save bundle redistributes operating system packages in binary form, in
+offline-packages.tar.gz. THIRD_PARTY_NOTICES.txt lists them. Some are licensed under the GNU
+General Public License or the GNU Lesser General Public License.
+
+The distributor of this bundle hereby makes a written offer, valid for three (3) years from the
+date this bundle was created ($(date -u +%Y-%m-%d)), to give any third party who possesses this
+bundle a complete machine-readable copy of the corresponding source code for those packages,
+for a charge no more than the cost of physically performing the source distribution.
+
+The source is also publicly available from the operating system distribution that each package
+came from (for example, apt-get source <package> on Debian and Ubuntu).
+
+To request the source on a physical medium, contact: ${LICENSE_OFFER_CONTACT}
+
+This offer is independent of the Apache-2.0 license covering the scripts themselves.
+EOF
+}
+
 install_registry_cert() {
     local registry_hostname registry_port
     registry_hostname=$(echo "$REGISTRY_URL" | cut -d':' -f1)
@@ -1052,10 +1102,11 @@ elif [[ $SAVE_MODE -eq 1 || $PUSH_MODE -eq 1 || $KEEP_MODE -eq 1 || $LOCK_MODE -
         printf '%s\n' "${images_to_manage[@]}" > "$TEMP_DIR/images/manifest.txt"
         write_lock_file "$TEMP_DIR/images/images.lock"
         echo "$SCRIPT_VERSION" > "$TEMP_DIR/images/HELPER_VERSION"
+        generate_bundle_licenses "$TEMP_DIR"
         echo "--- Creating image_pull_push archive '$SAVE_FILE_NAME'"
         # Write to a temporary name, then rename atomically, so an interrupted
         # save never leaves a truncated archive matching container_images_*.tar.gz
-        if ! tar -czf "$SAVE_FILE_NAME.partial" -C "$TEMP_DIR" "images" "offline-packages.tar.gz" "install_packages.sh"; then
+        if ! tar -czf "$SAVE_FILE_NAME.partial" -C "$TEMP_DIR" "images" "offline-packages.tar.gz" "install_packages.sh" "LICENSES"; then
             echo "Error: Failed to create the final tar.gz archive."
             exit 1
         fi
