@@ -7,7 +7,7 @@ set -o nounset
 set -o pipefail
 
 # --- Global Variables ---
-SCRIPT_VERSION="1.1.2"
+SCRIPT_VERSION="1.2.0"
 SCRIPT_NAME=$(basename "$0")
 IMAGES_FILE=""
 SAVE_MODE=0
@@ -821,9 +821,24 @@ if [[ "${BASH_SOURCE[0]:-$0}" != "$0" ]]; then
     return 0
 fi
 
-# These two work for anyone, so they come before the root check
-for arg in "$@"; do
-    case "$arg" in
+# creds_follow <args after the registry...>: true when the next two arguments are the registry's user and password (I6,
+# spec 21). They are whenever two or more follow the registry, whatever they say, so a password of push, keep, -f or
+# --help is a password. A single word after the registry is a command, as in 'push <registry> keep', or else a user
+# with no password, which is refused below.
+creds_follow() { [[ $# -ge 2 ]]; }
+
+# These two work for anyone, so they come before the root check. The scan reads the arguments the way the parser below
+# does, so it skips -f's value, the registry, and the user and password after it.
+pre_args=("$@")
+for ((i = 0; i < ${#pre_args[@]}; i++)); do
+    case "${pre_args[i]}" in
+        -f) i=$((i + 1)) ;;
+        push|reg-cert)
+            if [[ $((i + 1)) -lt ${#pre_args[@]} ]]; then
+                i=$((i + 1))
+                if creds_follow "${pre_args[@]:i+1}"; then i=$((i + 2)); fi
+            fi
+            ;;
         --version) echo "$SCRIPT_VERSION"; exit 0 ;;
         -h|--help) usage 0 ;;
     esac
@@ -841,11 +856,23 @@ os_type
 # Select the per-distro docker package list (applies to every mode)
 select_docker_packages
 
-# Parse command-line parameters
+# Parse command-line parameters. The user and the password after the registry are taken by position (creds_follow).
+cred_slots=0
+registry_seen=0
 while [[ $# -gt 0 ]]; do
+    if [[ $cred_slots -gt 0 ]]; then
+        if [[ $cred_slots -eq 2 ]]; then
+            REGISTRY_USER="$1"
+        else
+            REGISTRY_PASS="$1"
+        fi
+        cred_slots=$((cred_slots - 1))
+        shift
+        continue
+    fi
     case "$1" in
         -f)
-            if [[ -z "$2" ]]; then
+            if [[ -z "${2:-}" ]]; then
                 echo "Error: -f requires a file path."
                 usage
             fi
@@ -878,18 +905,14 @@ while [[ $# -gt 0 ]]; do
             shift
             ;;
         *)
-            # Handle registry URL, username, and password
-            if [[ $PUSH_MODE -eq 1 || $REG_CERT_MODE -eq 1 ]]; then
-                if [[ -z "$REGISTRY_URL" ]]; then
-                    REGISTRY_URL="$1"
-                elif [[ -z "$REGISTRY_USER" ]]; then
-                    REGISTRY_USER="$1"
-                elif [[ -z "$REGISTRY_PASS" ]]; then
-                    REGISTRY_PASS="$1"
-                else
-                    echo "Error: Unknown parameter '$1'."
-                    usage
-                fi
+            # The registry, after push or reg-cert. The user and the password follow it, by position.
+            if [[ ($PUSH_MODE -eq 1 || $REG_CERT_MODE -eq 1) && $registry_seen -eq 0 ]]; then
+                REGISTRY_URL="$1"
+                registry_seen=1
+                if creds_follow "${@:2}"; then cred_slots=2; fi
+            elif [[ ($PUSH_MODE -eq 1 || $REG_CERT_MODE -eq 1) && -z "$REGISTRY_USER" && $# -eq 1 ]]; then
+                # One word after the registry that isn't a command: a user with no password, refused below
+                REGISTRY_USER="$1"
             else
                 echo "Error: Unknown parameter '$1'."
                 usage
@@ -960,6 +983,17 @@ if [[ $PUSH_MODE -eq 1 || $REG_CERT_MODE -eq 1 ]]; then
         if [[ -n "$REGISTRY_USER" ]] && [[ -z "$REGISTRY_PASS" ]]; then
             echo "Error: A password is required when a username is specified."
             usage
+        fi
+        # Spec 21: any printable password works. A registry login can't carry a : in the user name, where basic auth
+        # splits, or a space at either end, which docker login trims, and neither can carry a control character.
+        if [[ "$REGISTRY_USER" == *:* || "$REGISTRY_USER" == [[:space:]]* || "$REGISTRY_USER" == *[[:space:]] || "$REGISTRY_USER" == *[[:cntrl:]]* ]]; then
+            echo "Error: The registry username can't contain ':' or a control character, or start or end with a space,"
+            echo "  because a registry login can't carry them. Nothing has been changed."
+            exit 1
+        fi
+        if [[ "$REGISTRY_PASS" == *[[:cntrl:]]* ]]; then
+            echo "Error: The registry password can't contain a control character, such as a tab or a newline. Nothing has been changed."
+            exit 1
         fi
     fi
 fi
