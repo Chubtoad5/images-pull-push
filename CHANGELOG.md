@@ -21,6 +21,10 @@
   before anything is pulled, with a message that names the field. Registry logins can't carry them: basic auth splits
   the user at `:`, and `docker login` trims spaces. Passwords have no length cap here, because registry tokens can be
   long.
+- **A password with a space at either end needs Docker 29.3 or later.** Docker's CLI before 29.3 trims those spaces
+  from the password `docker login` is given, on stdin too, so the registry refuses the login. On such a Docker the
+  push now stops before anything is pulled, saying why, rather than with "Failed to log in" after the pulls. Found by
+  CI, whose integration host runs Docker 28.5.
 
 ### Tests
 - `tests/password-vectors.txt` and `tests/vectors.bash`: spec 21's test passwords, the same in every changed repo.

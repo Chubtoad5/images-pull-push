@@ -24,9 +24,19 @@ registry() {
     -e REGISTRY_AUTH_HTPASSWD_PATH=/c/htpasswd registry:2 >/dev/null && up
 }
 echo alpine:3.20 > list.txt
+# Docker's CLI before 29.3 trims spaces at either end of a login's password (10-pinning.sh leaves Docker 28.5 here), so
+# there the password with spaces at either end must be refused up front, saying why
+dv=$(docker version --format '{{.Client.Version}}' 2>/dev/null)
+old_docker=0; [[ "$(printf '%s\n%s\n' "$dv" 29.3.0 | sort -V | head -n 1)" != 29.3.0 ]] && old_docker=1
 for name in full ends word-help; do
   P=${VEC[$name]}
   registry "$P" || { bad "$name: the test registry didn't start"; continue; }
+  if [[ $name == ends && $old_docker == 1 ]]; then
+    if ./image_pull_push.sh -f list.txt push localhost:5444 robot "$P" > o 2>&1; then bad "ends: Docker $dv trims the password, but the push was attempted and passed"
+    elif grep -q 'older than 29.3' o; then ok "ends: refused up front on Docker $dv, which trims a password's spaces, and says so"
+    else bad "ends: on Docker $dv the push failed without saying why"; tail -n 3 o | cut -c1-170; fi
+    continue
+  fi
   if ./image_pull_push.sh -f list.txt push localhost:5444 robot "$P" > o 2>&1; then ok "$name: push with that password"
   else bad "$name: push with that password"; tail -n 4 o | cut -c1-170; fi
   grep -q 'Usage:' o && bad "$name: printed the usage" || true

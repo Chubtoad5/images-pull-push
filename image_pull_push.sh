@@ -803,6 +803,28 @@ mirror_fallback_for() {
     echo "mirror.gcr.io/$image"
 }
 
+# docker_trims_password: true when this host's Docker CLI is older than 29.3. Those versions trim spaces at either end
+# of the password docker login is given, on stdin too, so such a password can't log in (spec 21, measured in CI).
+docker_trims_password() {
+    local v
+    v=$(docker version --format '{{.Client.Version}}' 2>/dev/null) || return 1
+    [[ -n "$v" ]] || return 1
+    [[ "$(printf '%s\n%s\n' "$v" 29.3.0 | sort -V | head -n 1)" != 29.3.0 ]]
+}
+
+# check_password_ends: a registry password with a space at either end needs Docker 29.3 or later. Checked before any
+# image is pulled, so the run stops with the reason, not with "Failed to log in" after the pulls.
+check_password_ends() {
+    [[ -n "$REGISTRY_USER" ]] || return 0
+    [[ "$REGISTRY_PASS" == [[:space:]]* || "$REGISTRY_PASS" == *[[:space:]] ]] || return 0
+    if docker_trims_password; then
+        echo "Error: The registry password starts or ends with a space, and this host's Docker CLI"
+        echo "  ($(docker version --format '{{.Client.Version}}' 2>/dev/null)) is older than 29.3, whose docker login trims those spaces,"
+        echo "  so the registry would refuse it. Use Docker 29.3 or later, or a password without them. Nothing has been changed."
+        exit 1
+    fi
+}
+
 login_to_registry() {
     echo "  Logging in to registry $REGISTRY_URL"
     if [[ -n "$REGISTRY_USER" ]]; then
@@ -1014,6 +1036,9 @@ echo "  OS: $os_id"
 
 # Run preflight checks
 validate_prerequisites
+if [[ $PUSH_MODE -eq 1 ]]; then
+    check_password_ends
+fi
 
 # Check and run air-gapped logic
 if [[ $AIR_GAPPED_MODE -eq 1 ]]; then

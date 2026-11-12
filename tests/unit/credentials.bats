@@ -12,7 +12,7 @@ setup() {
   # docker login records its user and the exact bytes on stdin; everything else succeeds quietly
   stub docker 'case "$1" in
     info) echo "classic" ;;
-    version) echo 29.0.0 ;;
+    version) echo "${STUB_DOCKER_VERSION:-29.9.2}" ;;
     image) echo "sha256:id1" ;;
     login) shift; while [[ $# -gt 0 ]]; do [[ "$1" == --username ]] && printf "%s" "$2" > "${STUB_LOG%/*}/login.user"; shift; done
            cat > "${STUB_LOG%/*}/login.stdin" ;;
@@ -118,4 +118,17 @@ pushed_with() {
   [ "$status" -eq 0 ]
   [[ "$output" == *"KEEP IMAGES: 1"* ]]
   [ "$(cat "$STUB_DIR/login.stdin")" = pw ]
+}
+@test "a password with a space at either end is refused up front on a Docker older than 29.3, whose login trims it" {
+  export STUB_DOCKER_VERSION=28.5.2
+  run "$SCRIPT" -f images.txt push reg.test:443 robot ' Aa1pass '
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"older than 29.3"* && "$output" == *"Nothing has been changed"* ]]
+  [[ "$output" != *"Aa1pass"* ]]
+  ! called 'docker pull' || false
+  ! called 'docker login' || false
+  # Spaces only inside are fine there, and 29.3 takes spaces at either end
+  pushed_with robot 'Aa1 pass'
+  export STUB_DOCKER_VERSION=29.3.0
+  pushed_with robot ' Aa1pass '
 }
