@@ -125,6 +125,8 @@ pushed_with() {
   [ "$status" -ne 0 ]
   [[ "$output" == *"older than 29.3"* && "$output" == *"Nothing has been changed"* ]]
   [[ "$output" != *"Aa1pass"* ]]
+  # Before the certificate step, which can restart Docker
+  ! called 'openssl' || false
   ! called 'docker pull' || false
   ! called 'docker login' || false
   # Spaces only inside are fine there, and 29.3 takes spaces at either end

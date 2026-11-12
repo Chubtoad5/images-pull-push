@@ -812,15 +812,20 @@ docker_trims_password() {
     [[ "$(printf '%s\n%s\n' "$v" 29.3.0 | sort -V | head -n 1)" != 29.3.0 ]]
 }
 
-# check_password_ends: a registry password with a space at either end needs Docker 29.3 or later. Checked before any
-# image is pulled, so the run stops with the reason, not with "Failed to log in" after the pulls.
+# check_password_ends [installed]: a registry password with a space at either end needs Docker 29.3 or later. Checked
+# before anything else when Docker is already here, so the run stops with the reason, not with "Failed to log in" after
+# the pulls. With "installed", Docker was just installed by this run, and that is all that has changed.
 check_password_ends() {
     [[ -n "$REGISTRY_USER" ]] || return 0
     [[ "$REGISTRY_PASS" == [[:space:]]* || "$REGISTRY_PASS" == *[[:space:]] ]] || return 0
     if docker_trims_password; then
         echo "Error: The registry password starts or ends with a space, and this host's Docker CLI"
         echo "  ($(docker version --format '{{.Client.Version}}' 2>/dev/null)) is older than 29.3, whose docker login trims those spaces,"
-        echo "  so the registry would refuse it. Use Docker 29.3 or later, or a password without them. Nothing has been changed."
+        if [[ "${1:-}" == installed ]]; then
+            echo "  so the registry would refuse it. Use Docker 29.3 or later, or a password without them. Only Docker was installed."
+        else
+            echo "  so the registry would refuse it. Use Docker 29.3 or later, or a password without them. Nothing has been changed."
+        fi
         exit 1
     fi
 }
@@ -1039,10 +1044,16 @@ echo "  ONLY ADD CERT: $REG_CERT_MODE"
 echo "  ONLY INSTALL DOCKER: $DOCKER_MODE"
 echo "  OS: $os_id"
 
-# Run preflight checks
-validate_prerequisites
-if [[ $PUSH_MODE -eq 1 ]]; then
+# Run preflight checks. The registry password's check comes before them when Docker is already here, since they may
+# install the registry's certificate and restart Docker (spec 21, rule 7).
+docker_was_here=0
+command -v docker >/dev/null 2>&1 && docker_was_here=1
+if [[ $PUSH_MODE -eq 1 && $docker_was_here -eq 1 ]]; then
     check_password_ends
+fi
+validate_prerequisites
+if [[ $PUSH_MODE -eq 1 && $docker_was_here -eq 0 ]]; then
+    check_password_ends installed
 fi
 
 # Check and run air-gapped logic
