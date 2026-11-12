@@ -1,5 +1,38 @@
 # Changelog — images-pull-push
 
+## v1.2.0 — 2026-11-12 — Any registry password works
+
+### Fixed
+- **A registry user or password that looks like a command word or an option is used as typed** (spec 21, I6). Before,
+  a password of `--help`, `-h` or `--version` printed the usage or the version and exited 0 having pushed nothing, so
+  rke2 and SeaweedFS carried on with an empty registry. A password of `push`, `save`, `keep`, `docker`, `reg-cert` or
+  `lock` stopped with a misleading error, `-f` stopped with `$2: unbound variable`, and a user of `-f` turned the
+  password into the images file. Now the two arguments after `<registry:port>` are the user and the password, by
+  position, and the `--help`/`--version` check skips them. `-f` with nothing after it says so.
+
+### Changed
+- **When two or more arguments follow `<registry:port>`, the first two are the user and the password.** Before, a
+  command or `-f` there was read as a command, so `push <registry> -f <file>` or `push <registry> keep save` now read
+  `-f`/`keep` as the user. Put commands and `-f` before `push`, or after the password. A single command after the
+  registry, as in `push <registry> keep`, still works. Every caller sends `-f <file> push <registry> <user> <password>`
+  (rke2, SeaweedFS, ap-tools), or `push <registry>` with nothing after it (ap-tools with no credentials).
+
+- **A registry user name with `:` or a space at either end, or a user or password with a control character, is refused**
+  before anything is pulled, with a message that names the field. Registry logins can't carry them: basic auth splits
+  the user at `:`, and `docker login` trims spaces. Passwords have no length cap here, because registry tokens can be
+  long.
+- **A password with a space at either end needs Docker 29.3 or later.** Docker's CLI before 29.3 trims those spaces
+  from the password `docker login` is given, on stdin too, so the registry refuses the login. On such a Docker the
+  push now stops before anything is pulled, saying why, rather than with "Failed to log in" after the pulls. Found by
+  CI, whose integration host runs Docker 28.5.
+
+### Tests
+- `tests/password-vectors.txt` and `tests/vectors.bash`: spec 21's test passwords, the same in every changed repo.
+- `tests/unit/credentials.bats`: each test password, command word and option as the password and as the user, compared
+  byte for byte with what `docker login` receives.
+- `tests/secret-lint.py` and `tests/unit/secret-lint.bats`: spec 21's static check, which fails on an unquoted secret, or
+  a secret given to `echo`, `eval`, `sed` or `--set`.
+
 ## v1.1.2 — 2026-11-09 — Air-gapped Docker on Rocky 10's image kernel
 
 ### Fixed

@@ -125,6 +125,13 @@ Parameters:
 
 - **Exit codes are truthful.** Any failure exits non-zero; success exits `0`. Safe to call from automation under `set -e`.
 - **Passwords are never printed.** The registry password is masked (`********`) in the runtime-argument display.
+- **Any password works, as typed** (spec 21): when two or more arguments follow `<registry:port>`, the first two are the
+  username and the password, taken by position, so a password such as `--help`, `push` or `-f` is a password, not an
+  option. It reaches `docker login` on stdin, never on the command line. Quote it in your shell, for example
+  `push my-registry.com:5000 robot 'Pa$$ w0rd!'`. Put `-f` and other commands before `push`, or after the password. A
+  username can't contain `:` or start or end with a space, because registry logins can't carry them. A password that
+  starts or ends with a space needs Docker 29.3 or later: older `docker login` trims those spaces, so on an older
+  Docker such a password is refused before anything is pulled, with a message that says so.
 - **Registry certificate handling:** `push`/`reg-cert` fetch the registry's full certificate chain and only update the trust store and restart Docker when the certificate actually changed. Re-running against an unchanged registry does not restart Docker, and a failed retrieval leaves nothing behind in the trust anchors.
 - **`save` always bundles the Docker packages** for the detected distro (Docker CE on Ubuntu/Debian/RHEL family, the distro `docker` package on SLES/openSUSE Leap), even when Docker is already installed on the build host. If the package archive cannot be produced, `save` fails loudly instead of producing an incomplete archive. When Docker is not yet installed on the build host, the packages are saved **before** Docker is installed, so the archive captures Docker's full dependency closure — this matters on SUSE, where zypper only resolves dependencies missing from the build host.
 - **EL10 kernel modules:** on RHEL/Rocky/Alma 10, stock cloud images omit `kernel-modules-extra`, which provides the `xt_addrtype` module the Docker daemon needs for its NAT rules. The installer detects this and installs `kernel-modules-extra` matched to the *running* kernel; if that version has aged out of the repos it installs the latest kernel + modules and exits with an explicit "reboot, then re-run" error instead of leaving a docker that cannot start. Air-gapped, `save` on such a host also bundles the build host's running kernel's `kernel-modules-extra`, and the install uses it when the target runs that same kernel, as a target built from the same image does. On any other kernel, it says which package to bring from local media.

@@ -7,7 +7,7 @@ set -o nounset
 set -o pipefail
 
 # --- Global Variables ---
-SCRIPT_VERSION="1.1.2"
+SCRIPT_VERSION="1.2.0"
 SCRIPT_NAME=$(basename "$0")
 IMAGES_FILE=""
 SAVE_MODE=0
@@ -803,6 +803,33 @@ mirror_fallback_for() {
     echo "mirror.gcr.io/$image"
 }
 
+# docker_trims_password: true when this host's Docker CLI is older than 29.3. Those versions trim spaces at either end
+# of the password docker login is given, on stdin too, so such a password can't log in (spec 21, measured in CI).
+docker_trims_password() {
+    local v
+    v=$(docker version --format '{{.Client.Version}}' 2>/dev/null) || return 1
+    [[ -n "$v" ]] || return 1
+    [[ "$(printf '%s\n%s\n' "$v" 29.3.0 | sort -V | head -n 1)" != 29.3.0 ]]
+}
+
+# check_password_ends [installed]: a registry password with a space at either end needs Docker 29.3 or later. Checked
+# before anything else when Docker is already here, so the run stops with the reason, not with "Failed to log in" after
+# the pulls. With "installed", Docker was just installed by this run, and that is all that has changed.
+check_password_ends() {
+    [[ -n "$REGISTRY_USER" ]] || return 0
+    [[ "$REGISTRY_PASS" == [[:space:]]* || "$REGISTRY_PASS" == *[[:space:]] ]] || return 0
+    if docker_trims_password; then
+        echo "Error: The registry password starts or ends with a space, and this host's Docker CLI"
+        echo "  ($(docker version --format '{{.Client.Version}}' 2>/dev/null)) is older than 29.3, whose docker login trims those spaces,"
+        if [[ "${1:-}" == installed ]]; then
+            echo "  so the registry would refuse it. Use Docker 29.3 or later, or a password without them. Only Docker was installed."
+        else
+            echo "  so the registry would refuse it. Use Docker 29.3 or later, or a password without them. Nothing has been changed."
+        fi
+        exit 1
+    fi
+}
+
 login_to_registry() {
     echo "  Logging in to registry $REGISTRY_URL"
     if [[ -n "$REGISTRY_USER" ]]; then
@@ -821,11 +848,31 @@ if [[ "${BASH_SOURCE[0]:-$0}" != "$0" ]]; then
     return 0
 fi
 
-# These two work for anyone, so they come before the root check
-for arg in "$@"; do
-    case "$arg" in
+# creds_follow <args after the registry...>: true when the next two arguments are the registry's user and password (I6,
+# spec 21). They are whenever two or more follow the registry, whatever they say, so a password of push, keep, -f or
+# --help is a password. A single word after the registry is a command, as in 'push <registry> keep', or else a user
+# with no password, which is refused below.
+creds_follow() { [[ $# -ge 2 ]]; }
+
+# These two work for anyone, so they come before the root check. The scan walks the arguments exactly as the parser
+# below does: -f's value, the commands, then the first other word after push or reg-cert is the registry, and the user
+# and password follow it. Only a --help or --version the parser would see as a word of its own counts.
+pre_args=("$@")
+pre_cmd=0 pre_registry=0 pre_slots=0
+for ((i = 0; i < ${#pre_args[@]}; i++)); do
+    if [[ $pre_slots -gt 0 ]]; then pre_slots=$((pre_slots - 1)); continue; fi
+    case "${pre_args[i]}" in
+        -f) i=$((i + 1)) ;;
+        docker|keep|save|lock) ;;
+        push|reg-cert) pre_cmd=1 ;;
         --version) echo "$SCRIPT_VERSION"; exit 0 ;;
         -h|--help) usage 0 ;;
+        *)
+            if [[ $pre_cmd -eq 1 && $pre_registry -eq 0 ]]; then
+                pre_registry=1
+                if creds_follow "${pre_args[@]:i+1}"; then pre_slots=2; fi
+            fi
+            ;;
     esac
 done
 
@@ -841,11 +888,23 @@ os_type
 # Select the per-distro docker package list (applies to every mode)
 select_docker_packages
 
-# Parse command-line parameters
+# Parse command-line parameters. The user and the password after the registry are taken by position (creds_follow).
+cred_slots=0
+registry_seen=0
 while [[ $# -gt 0 ]]; do
+    if [[ $cred_slots -gt 0 ]]; then
+        if [[ $cred_slots -eq 2 ]]; then
+            REGISTRY_USER="$1"
+        else
+            REGISTRY_PASS="$1"
+        fi
+        cred_slots=$((cred_slots - 1))
+        shift
+        continue
+    fi
     case "$1" in
         -f)
-            if [[ -z "$2" ]]; then
+            if [[ -z "${2:-}" ]]; then
                 echo "Error: -f requires a file path."
                 usage
             fi
@@ -878,18 +937,14 @@ while [[ $# -gt 0 ]]; do
             shift
             ;;
         *)
-            # Handle registry URL, username, and password
-            if [[ $PUSH_MODE -eq 1 || $REG_CERT_MODE -eq 1 ]]; then
-                if [[ -z "$REGISTRY_URL" ]]; then
-                    REGISTRY_URL="$1"
-                elif [[ -z "$REGISTRY_USER" ]]; then
-                    REGISTRY_USER="$1"
-                elif [[ -z "$REGISTRY_PASS" ]]; then
-                    REGISTRY_PASS="$1"
-                else
-                    echo "Error: Unknown parameter '$1'."
-                    usage
-                fi
+            # The registry, after push or reg-cert. The user and the password follow it, by position.
+            if [[ ($PUSH_MODE -eq 1 || $REG_CERT_MODE -eq 1) && $registry_seen -eq 0 ]]; then
+                REGISTRY_URL="$1"
+                registry_seen=1
+                if creds_follow "${@:2}"; then cred_slots=2; fi
+            elif [[ ($PUSH_MODE -eq 1 || $REG_CERT_MODE -eq 1) && -z "$REGISTRY_USER" && $# -eq 1 ]]; then
+                # One word after the registry that isn't a command: a user with no password, refused below
+                REGISTRY_USER="$1"
             else
                 echo "Error: Unknown parameter '$1'."
                 usage
@@ -961,6 +1016,17 @@ if [[ $PUSH_MODE -eq 1 || $REG_CERT_MODE -eq 1 ]]; then
             echo "Error: A password is required when a username is specified."
             usage
         fi
+        # Spec 21: any printable password works. A registry login can't carry a : in the user name, where basic auth
+        # splits, or a space at either end, which docker login trims, and neither can carry a control character.
+        if [[ "$REGISTRY_USER" == *:* || "$REGISTRY_USER" == [[:space:]]* || "$REGISTRY_USER" == *[[:space:]] || "$REGISTRY_USER" == *[[:cntrl:]]* ]]; then
+            echo "Error: The registry username can't contain ':' or a control character, or start or end with a space,"
+            echo "  because a registry login can't carry them. Nothing has been changed."
+            exit 1
+        fi
+        if [[ "$REGISTRY_PASS" == *[[:cntrl:]]* ]]; then
+            echo "Error: The registry password can't contain a control character, such as a tab or a newline. Nothing has been changed."
+            exit 1
+        fi
     fi
 fi
 
@@ -978,8 +1044,17 @@ echo "  ONLY ADD CERT: $REG_CERT_MODE"
 echo "  ONLY INSTALL DOCKER: $DOCKER_MODE"
 echo "  OS: $os_id"
 
-# Run preflight checks
+# Run preflight checks. The registry password's check comes before them when Docker is already here, since they may
+# install the registry's certificate and restart Docker (spec 21, rule 7).
+docker_was_here=0
+command -v docker >/dev/null 2>&1 && docker_was_here=1
+if [[ $PUSH_MODE -eq 1 && $docker_was_here -eq 1 ]]; then
+    check_password_ends
+fi
 validate_prerequisites
+if [[ $PUSH_MODE -eq 1 && $docker_was_here -eq 0 ]]; then
+    check_password_ends installed
+fi
 
 # Check and run air-gapped logic
 if [[ $AIR_GAPPED_MODE -eq 1 ]]; then
