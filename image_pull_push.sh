@@ -849,20 +849,25 @@ fi
 # with no password, which is refused below.
 creds_follow() { [[ $# -ge 2 ]]; }
 
-# These two work for anyone, so they come before the root check. The scan reads the arguments the way the parser below
-# does, so it skips -f's value, the registry, and the user and password after it.
+# These two work for anyone, so they come before the root check. The scan walks the arguments exactly as the parser
+# below does: -f's value, the commands, then the first other word after push or reg-cert is the registry, and the user
+# and password follow it. Only a --help or --version the parser would see as a word of its own counts.
 pre_args=("$@")
+pre_cmd=0 pre_registry=0 pre_slots=0
 for ((i = 0; i < ${#pre_args[@]}; i++)); do
+    if [[ $pre_slots -gt 0 ]]; then pre_slots=$((pre_slots - 1)); continue; fi
     case "${pre_args[i]}" in
         -f) i=$((i + 1)) ;;
-        push|reg-cert)
-            if [[ $((i + 1)) -lt ${#pre_args[@]} ]]; then
-                i=$((i + 1))
-                if creds_follow "${pre_args[@]:i+1}"; then i=$((i + 2)); fi
-            fi
-            ;;
+        docker|keep|save|lock) ;;
+        push|reg-cert) pre_cmd=1 ;;
         --version) echo "$SCRIPT_VERSION"; exit 0 ;;
         -h|--help) usage 0 ;;
+        *)
+            if [[ $pre_cmd -eq 1 && $pre_registry -eq 0 ]]; then
+                pre_registry=1
+                if creds_follow "${pre_args[@]:i+1}"; then pre_slots=2; fi
+            fi
+            ;;
     esac
 done
 

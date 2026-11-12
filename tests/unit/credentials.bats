@@ -132,3 +132,13 @@ pushed_with() {
   export STUB_DOCKER_VERSION=29.3.0
   pushed_with robot ' Aa1pass '
 }
+@test "--help or --version as the password is a password in every argument order the parser takes" {
+  local w
+  for w in --help -h --version; do
+    pushed_with robot "$w"
+    run "$SCRIPT" push -f images.txt reg.test:443 robot "$w"
+    [ "$status" -eq 0 ]; [ "$(cat "$STUB_DIR/login.stdin")" = "$w" ]
+    run "$SCRIPT" push keep -f images.txt reg.test:443 robot "$w"
+    [ "$status" -eq 0 ]; [ "$(cat "$STUB_DIR/login.stdin")" = "$w" ]
+  done
+}
