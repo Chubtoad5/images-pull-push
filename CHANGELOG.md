@@ -2,7 +2,7 @@
 
 ## v1.2.1 — 2026-11-13 — Trust a registry without restarting Docker
 
-Spec 23 (chubtoad-automation), from dap-blueprints Plan 01's Q58 (finding 4 of its bifrost tests).
+Spec 23 (chubtoad-automation).
 
 ### Fixed
 - **Trusting a registry's certificate no longer restarts Docker** (I7). The first `push`, or `reg-cert` before a pull,
