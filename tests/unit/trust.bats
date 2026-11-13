@@ -94,7 +94,7 @@ teardown() {
   [ ! -e /etc/docker/certs.d/reg.test:5443/x ]
 }
 @test "I7: an IPv4 address and an FQDN with a port are accepted" {
-  for r in 192.168.10.215:5000 harbor.lab.example:8443; do
+  for r in 192.0.2.10:5000 harbor.example.test:8443; do
     REGISTRY_URL=$r
     run install_registry_cert
     [ "$status" -eq 0 ]
