@@ -1,5 +1,32 @@
 # Changelog — images-pull-push
 
+## v1.2.1 — 2026-11-13 — Trust a registry without restarting Docker
+
+Spec 23 (chubtoad-automation).
+
+### Fixed
+- **Trusting a registry's certificate no longer restarts Docker** (I7). The first `push`, or `reg-cert` before a pull,
+  against a registry with a new certificate ran `systemctl restart docker`, so every container on the host stopped and
+  started again, and so did the next run after the certificate was renewed. SeaweedFS's `seaweed-mount` couldn't come
+  back from that, so SMB and NFS on that host went down until it restarted. Now the chain also goes to
+  `/etc/docker/certs.d/<registry:port>/ca.crt`, which Docker reads on each registry connection (push, pull and login,
+  with both of Docker's image stores; tested on Ubuntu 24.04 and Rocky 10). The trust-store copy stays, under the same
+  name, for other clients. Each copy is written only when it differs. A Docker that is installed but stopped is started,
+  as the restart did. A registry that isn't `<host>:<port>` is refused before anything is written.
+- **The Docker 29.3 check works with the daemon stopped** (I8). `docker version` exits 1 when it can't reach the daemon,
+  though it prints the client's version, and the check read that as a Docker that doesn't trim passwords. So with an
+  old Docker stopped, a password with a space at either end failed later with "Failed to log in".
+- **That check's message names the certificate** (I8). After the run installed Docker, it said "Only Docker was
+  installed", though the registry's certificate had been trusted too.
+
+### Tests
+- `tests/unit/trust.bats`: both copies written, nothing written or started when unchanged, a renewal, a stopped Docker
+  started and never restarted, the registry name refused, an IPv4 address and an FQDN accepted, and I8's two cases. 11 of its 14 tests fail on v1.2.0.
+- `tests/integration/20-credentials.sh`: the test registry is reached by the host's own address, since Docker never
+  verifies `localhost`. Docker must refuse it before the run, and the first push and a push after a renewal must leave
+  dockerd's pid and the registry container running. With Docker older than 29.3, the check is run with the daemon
+  stopped.
+
 ## v1.2.0 — 2026-11-12 — Any registry password works
 
 ### Fixed

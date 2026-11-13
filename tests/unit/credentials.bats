@@ -21,6 +21,9 @@ setup() {
   stub openssl 'if [[ "$1" == s_client ]]; then printf "%s\n" "-----BEGIN CERTIFICATE-----" FAKE "-----END CERTIFICATE-----"; fi'
   mkdir -p /usr/local/share/ca-certificates
   printf '%s\n' "-----BEGIN CERTIFICATE-----" FAKE "-----END CERTIFICATE-----" > /usr/local/share/ca-certificates/reg.test.crt
+  # ...and Docker's own copy (spec 23, I7), so neither is written
+  mkdir -p /etc/docker/certs.d/reg.test:443
+  printf '%s\n' "-----BEGIN CERTIFICATE-----" FAKE "-----END CERTIFICATE-----" > /etc/docker/certs.d/reg.test:443/ca.crt
   cat > helper.sh <<'H'
 #!/bin/bash
 echo "helper $*" >> "$STUB_LOG"
