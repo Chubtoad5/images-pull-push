@@ -7,7 +7,7 @@ set -o nounset
 set -o pipefail
 
 # --- Global Variables ---
-SCRIPT_VERSION="1.2.0"
+SCRIPT_VERSION="1.2.1"
 SCRIPT_NAME=$(basename "$0")
 IMAGES_FILE=""
 SAVE_MODE=0
@@ -20,6 +20,7 @@ AIR_GAPPED_MODE=0
 REGISTRY_URL=""
 REGISTRY_USER=""
 REGISTRY_PASS=""
+CERT_WRITTEN=0     # 1 once install_registry_cert has written the registry's certificate in this run
 CLEANUP_REQUIRED=0
 TEMP_DIR=""
 user_name=${SUDO_USER:-$(whoami)}
@@ -756,21 +757,46 @@ install_registry_cert() {
         echo "Error: Did not receive a valid certificate from '$REGISTRY_URL'. Please ensure the registry is accessible and the port is correct."
         exit 1
     fi
-    # Only (re)install the certificate and restart docker when the fetched
-    # certificate differs from the one already installed
-    if [[ -s "$cert_path" ]] && cmp -s "$tmp_cert" "$cert_path"; then
-        echo "  Certificate for $registry_hostname already installed and unchanged, skipping trust store update and docker restart"
-        return 0
-    fi
-    cp "$tmp_cert" "$cert_path"
-    echo "  Certificate saved to $cert_path"
-    echo "  Updating system certificate store with command: $update_cmd"
-    if ! $update_cmd &> /dev/null; then
-        echo "Error: Failed to update CA trust store. Please check the command output."
+    # Two copies (spec 23, I7). Docker reads /etc/docker/certs.d/<registry>/ca.crt on each registry connection, so it
+    # trusts the registry without a restart, and every container on the host keeps running. The system trust store
+    # keeps its copy, under the same name, for other clients: curl, Helm, and ap-tools, which reads it to find the CA
+    # and tell a change. Each copy is written only when it differs from the fetched chain.
+    # It names a folder under /etc/docker/certs.d, so only <host>:<port>, as every caller already sends it
+    if [[ ! "$REGISTRY_URL" =~ ^[A-Za-z0-9][A-Za-z0-9.-]*:[0-9]{1,5}$ ]]; then
+        echo "Error: The registry must be given as <host>:<port>, not '$REGISTRY_URL'."
         exit 1
     fi
-    if command -v docker &> /dev/null; then
-        systemctl restart docker
+    local docker_cert_dir="/etc/docker/certs.d/$REGISTRY_URL"
+    local docker_cert="$docker_cert_dir/ca.crt"
+    local store_same=0 docker_same=0
+    [[ -s "$cert_path" ]] && cmp -s "$tmp_cert" "$cert_path" && store_same=1
+    [[ -s "$docker_cert" ]] && cmp -s "$tmp_cert" "$docker_cert" && docker_same=1
+    if [[ $store_same -eq 1 && $docker_same -eq 1 ]]; then
+        echo "  Certificate for $REGISTRY_URL already installed and unchanged"
+        return 0
+    fi
+    if [[ $store_same -eq 0 ]]; then
+        cp "$tmp_cert" "$cert_path"
+        echo "  Certificate saved to $cert_path"
+        echo "  Updating system certificate store with command: $update_cmd"
+        if ! $update_cmd &> /dev/null; then
+            echo "Error: Failed to update CA trust store. Please check the command output."
+            exit 1
+        fi
+    fi
+    if [[ $docker_same -eq 0 ]]; then
+        install -d -m 755 "$docker_cert_dir"
+        install -m 644 "$tmp_cert" "$docker_cert"
+        echo "  Certificate saved to $docker_cert, which Docker reads without a restart"
+    fi
+    CERT_WRITTEN=1
+    # A stopped Docker is started, as the restart this replaces did. A running one is left alone, with its containers.
+    if command -v docker &> /dev/null && command -v systemctl &> /dev/null && ! systemctl is-active --quiet docker; then
+        echo "  Docker is installed but not running, starting it"
+        if ! systemctl start docker; then
+            echo "Error: Docker is installed but not running, and 'systemctl start docker' failed."
+            exit 1
+        fi
     fi
 }
 
@@ -805,23 +831,29 @@ mirror_fallback_for() {
 
 # docker_trims_password: true when this host's Docker CLI is older than 29.3. Those versions trim spaces at either end
 # of the password docker login is given, on stdin too, so such a password can't log in (spec 21, measured in CI).
+# 'docker version' exits 1 when the daemon is down, but still prints the client's version, which is all this needs
+# (spec 23, I8).
 docker_trims_password() {
     local v
-    v=$(docker version --format '{{.Client.Version}}' 2>/dev/null) || return 1
+    v=$(docker version --format '{{.Client.Version}}' 2>/dev/null || true)
     [[ -n "$v" ]] || return 1
     [[ "$(printf '%s\n%s\n' "$v" 29.3.0 | sort -V | head -n 1)" != 29.3.0 ]]
 }
 
 # check_password_ends [installed]: a registry password with a space at either end needs Docker 29.3 or later. Checked
 # before anything else when Docker is already here, so the run stops with the reason, not with "Failed to log in" after
-# the pulls. With "installed", Docker was just installed by this run, and that is all that has changed.
+# the pulls. With "installed", Docker was just installed by this run, and the registry's certificate may have been
+# trusted before that (spec 23, I8): those are all that has changed.
 check_password_ends() {
     [[ -n "$REGISTRY_USER" ]] || return 0
     [[ "$REGISTRY_PASS" == [[:space:]]* || "$REGISTRY_PASS" == *[[:space:]] ]] || return 0
     if docker_trims_password; then
         echo "Error: The registry password starts or ends with a space, and this host's Docker CLI"
-        echo "  ($(docker version --format '{{.Client.Version}}' 2>/dev/null)) is older than 29.3, whose docker login trims those spaces,"
-        if [[ "${1:-}" == installed ]]; then
+        echo "  ($(docker version --format '{{.Client.Version}}' 2>/dev/null || true)) is older than 29.3, whose docker login trims those spaces,"
+        if [[ "${1:-}" == installed && $CERT_WRITTEN -eq 1 ]]; then
+            echo "  so the registry would refuse it. Use Docker 29.3 or later, or a password without them. Docker was installed and"
+            echo "  the registry's certificate trusted (the system trust store and /etc/docker/certs.d/$REGISTRY_URL); nothing else changed."
+        elif [[ "${1:-}" == installed ]]; then
             echo "  so the registry would refuse it. Use Docker 29.3 or later, or a password without them. Only Docker was installed."
         else
             echo "  so the registry would refuse it. Use Docker 29.3 or later, or a password without them. Nothing has been changed."
@@ -1045,7 +1077,7 @@ echo "  ONLY INSTALL DOCKER: $DOCKER_MODE"
 echo "  OS: $os_id"
 
 # Run preflight checks. The registry password's check comes before them when Docker is already here, since they may
-# install the registry's certificate and restart Docker (spec 21, rule 7).
+# install the registry's certificate (spec 21, rule 7).
 docker_was_here=0
 command -v docker >/dev/null 2>&1 && docker_was_here=1
 if [[ $PUSH_MODE -eq 1 && $docker_was_here -eq 1 ]]; then
