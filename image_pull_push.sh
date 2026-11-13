@@ -761,9 +761,11 @@ install_registry_cert() {
     # trusts the registry without a restart, and every container on the host keeps running. The system trust store
     # keeps its copy, under the same name, for other clients: curl, Helm, and ap-tools, which reads it to find the CA
     # and tell a change. Each copy is written only when it differs from the fetched chain.
-    case "$REGISTRY_URL" in
-        ""|.*|*/*) echo "Error: The registry must be given as <host>:<port>, not '$REGISTRY_URL'."; exit 1 ;;
-    esac
+    # It names a folder under /etc/docker/certs.d, so only <host>:<port>, as every caller already sends it
+    if [[ ! "$REGISTRY_URL" =~ ^[A-Za-z0-9][A-Za-z0-9.-]*:[0-9]{1,5}$ ]]; then
+        echo "Error: The registry must be given as <host>:<port>, not '$REGISTRY_URL'."
+        exit 1
+    fi
     local docker_cert_dir="/etc/docker/certs.d/$REGISTRY_URL"
     local docker_cert="$docker_cert_dir/ca.crt"
     local store_same=0 docker_same=0

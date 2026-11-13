@@ -84,7 +84,7 @@ teardown() {
   [[ "$output" == *"'systemctl start docker' failed"* ]]
 }
 @test "I7: a registry that isn't <host>:<port> is refused before anything is written" {
-  for r in "reg.test:5443/x" "../etc:443" ""; do
+  for r in "reg.test:5443/x" "../etc:443" "" "reg.test:https" "reg.test" ".hidden:443"; do
     REGISTRY_URL=$r
     run install_registry_cert
     [ "$status" -eq 1 ]
@@ -92,6 +92,15 @@ teardown() {
   done
   [ ! -e "$STORE" ]
   [ ! -e /etc/docker/certs.d/reg.test:5443/x ]
+}
+@test "I7: an IPv4 address and an FQDN with a port are accepted" {
+  for r in 192.168.10.215:5000 harbor.lab.example:8443; do
+    REGISTRY_URL=$r
+    run install_registry_cert
+    [ "$status" -eq 0 ]
+    [ -s "/etc/docker/certs.d/$r/ca.crt" ]
+    rm -f "/etc/docker/certs.d/$r/ca.crt" "/usr/local/share/ca-certificates/${r%%:*}.crt"; rmdir "/etc/docker/certs.d/$r"
+  done
 }
 @test "I7: certs.d is named after the registry as given, port included" {
   REGISTRY_URL=reg.test:443
