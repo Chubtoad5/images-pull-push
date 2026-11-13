@@ -21,7 +21,7 @@ Spec 23 (chubtoad-automation).
 
 ### Tests
 - `tests/unit/trust.bats`: both copies written, nothing written or started when unchanged, a renewal, a stopped Docker
-  started and never restarted, the registry name refused, and I8's two cases. 10 of its 13 tests fail on v1.2.0.
+  started and never restarted, the registry name refused, an IPv4 address and an FQDN accepted, and I8's two cases. 11 of its 14 tests fail on v1.2.0.
 - `tests/integration/20-credentials.sh`: the test registry is reached by the host's own address, since Docker never
   verifies `localhost`. Docker must refuse it before the run, and the first push and a push after a renewal must leave
   dockerd's pid and the registry container running. With Docker older than 29.3, the check is run with the daemon
