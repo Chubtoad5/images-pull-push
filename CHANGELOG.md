@@ -1,6 +1,6 @@
 # Changelog — images-pull-push
 
-## v1.2.2 — unreleased — Docker starts after "reboot, then re-run"
+## v1.2.2 — 2026-11-19 — Docker starts after "reboot, then re-run"
 
 Spec 26 (chubtoad-automation).
 
