@@ -7,7 +7,7 @@ set -o nounset
 set -o pipefail
 
 # --- Global Variables ---
-SCRIPT_VERSION="1.2.1"
+SCRIPT_VERSION="1.2.2"
 SCRIPT_NAME=$(basename "$0")
 IMAGES_FILE=""
 SAVE_MODE=0
@@ -49,6 +49,8 @@ BRIDGE_JSON_CHANGED=0
 BRIDGE_JSON_COMMITTED=0
 BRIDGE_JSON_BACKUP=""
 ETC_DOCKER_CREATED=0
+# Created by dockerd the first time it starts, with the default bridge in it (spec 26)
+DOCKER_NETWORK_DB=/var/lib/docker/network/files/local-kv.db
 
 # --- Helper Functions ---
 
@@ -345,6 +347,7 @@ validate_prerequisites() {
         else
             echo "  Docker CLI found."
             warn_docker_version
+            start_stopped_docker
         fi
         if [[ $DOCKER_MODE -eq 1 ]]; then
             echo "  Docker installed"
@@ -630,18 +633,46 @@ install_docker() {
         echo "Error: Docker installation failed."
         exit 1
     fi
+    # Docker's packages stay installed on every exit from here on, such as the stop for a reboot in
+    # ensure_el_kernel_modules, so the daemon.json written for them and the docker group stay too (spec 26, P2)
+    usermod -aG docker "$user_name"
+    BRIDGE_JSON_COMMITTED=1
     ensure_el_kernel_modules
     if ! systemctl enable --now docker; then
-        echo "Error: Failed to enable and start the docker service."
+        echo "Error: Failed to enable and start the docker service. See 'journalctl -u docker' for why."
         exit 1
     fi
     if ! systemctl is-active --quiet docker; then
-        echo "Error: The docker service is not active after 'systemctl enable --now docker'."
+        echo "Error: The docker service is not active after 'systemctl enable --now docker'. See 'journalctl -u docker' for why."
         exit 1
     fi
-    usermod -aG docker "$user_name"
-    # Docker is installed and running: the daemon.json change is now permanent
-    BRIDGE_JSON_COMMITTED=1
+}
+
+# start_stopped_docker: Docker is installed but not running, as after this script's own "reboot, then re-run" (spec 26,
+# P1): run the kernel-module check and start and enable it, as the end of install_docker does. A running Docker is left
+# alone, with its containers (spec 23).
+start_stopped_docker() {
+    command -v systemctl &> /dev/null || return 0
+    systemctl is-active --quiet docker && return 0
+    echo "  Docker is installed but not running, starting it"
+    # Docker has never started here (no network store yet), as after an older release's "reboot, then re-run", which
+    # threw its daemon.json away: set up the bridge and the docker group first, as a first install does. A Docker that
+    # has run keeps its network as it is (spec 26, owner's choice of 2026-11-19).
+    if [[ ! -e "$DOCKER_NETWORK_DB" ]]; then
+        create_bridge_json
+        usermod -aG docker "$user_name"
+        BRIDGE_JSON_COMMITTED=1
+    fi
+    ensure_el_kernel_modules
+    if ! systemctl enable --now docker; then
+        echo "Error: Docker is installed but won't start. See 'journalctl -u docker' for why."
+        exit 1
+    fi
+    if ! systemctl is-active --quiet docker; then
+        echo "Error: The docker service is not active after 'systemctl enable --now docker'. See 'journalctl -u docker' for why."
+        exit 1
+    fi
+    echo "  Docker started and enabled"
 }
 
 save_docker_packages() {
