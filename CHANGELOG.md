@@ -1,5 +1,24 @@
 # Changelog — images-pull-push
 
+## v1.2.2 — 2026-11-19 — Docker starts after "reboot, then re-run"
+
+Spec 26 (chubtoad-automation).
+
+### Fixed
+- **A re-run after this script's own "reboot, then re-run" starts Docker** (P1). On a Rocky or RHEL host whose running
+  kernel had left the repos, the first run installed Docker and a newer kernel, then asked for a reboot. After the
+  reboot, the re-run found the Docker CLI and skipped the rest of the install. `docker` exited 0 with Docker stopped and
+  disabled, and `keep`, `save` and `push` failed with "Failed to pull image ... from both sources". Now a run that finds
+  Docker installed but not running does the kernel-module check, then `systemctl enable --now docker`, and says so. A
+  running Docker is still never restarted.
+- **The first run keeps its `daemon.json` and the `docker` group** (P2). The stop for a reboot counted as a failure, so
+  the run removed the `daemon.json` it had written, and Docker later came up on 172.17.0.0/16 instead of
+  `DOCKER_BRIDGE_CIDR` (172.30.0.1/16 by default). The user wasn't added to the `docker` group either. Both now happen as
+  soon as Docker's packages are installed.
+- **A host an older release left this way is repaired.** When Docker has never started (no network store under
+  `/var/lib/docker` yet), the re-run writes the bridge setting and adds the `docker` group before starting it. A Docker
+  that has ever run keeps its network as it is.
+
 ## v1.2.1 — 2026-11-13 — Trust a registry without restarting Docker
 
 Spec 23 (chubtoad-automation).
