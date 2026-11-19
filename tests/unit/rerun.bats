@@ -110,3 +110,17 @@ order() { grep -nE "$1" "$STUB_LOG" | head -1 | cut -d: -f1; }
   [ "$status" -eq 0 ]
   ! called "create_bridge_json" || false
 }
+@test "P1: with no docker.service here (a remote DOCKER_HOST, podman-docker), nothing is started or written" {
+  export STUB_ACTIVE=3
+  rm -f "$DOCKER_NETWORK_DB"
+  stub systemctl '[[ "$1" == is-active ]] && exit 3; [[ "$1" == cat ]] && exit 1; exit 0'
+  run start_stopped_docker
+  [ "$status" -eq 0 ]
+  ! called "create_bridge_json" || false
+  ! called "systemctl enable" || false
+  [[ "$output" != *"starting it"* ]]
+}
+@test "P1: the certificate step starts a stopped Docker the same way (enable, module check), before the Docker check" {
+  grep -B2 -A3 'if command -v docker &> /dev/null; then' "$BATS_TEST_DIRNAME/../../image_pull_push.sh" | grep -q '^ *start_stopped_docker$'
+  ! grep -q "systemctl start docker" "$BATS_TEST_DIRNAME/../../image_pull_push.sh" || false
+}

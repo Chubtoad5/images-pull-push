@@ -19,6 +19,8 @@ setup() {
   stub docker
   # systemctl is-active answers $STUB_ACTIVE (0 = running)
   stub systemctl '[[ "$1" == is-active ]] && exit "${STUB_ACTIVE:-0}"; exit 0'
+  # A Docker that has run before: no bridge step or group change on a start (spec 26)
+  DOCKER_NETWORK_DB=$TEMP_DIR/local-kv.db; touch "$DOCKER_NETWORK_DB"
   rm -f "$STORE" "$DCERT"; rmdir "/etc/docker/certs.d/$REG" 2>/dev/null || true
   mkdir -p /usr/local/share/ca-certificates
 }
@@ -62,11 +64,16 @@ teardown() {
   [ "$(cat "$STORE")" = "$(pem NEW)" ]
   ! called "systemctl restart" || false
 }
-@test "I7: a stopped Docker is started, not restarted" {
+@test "I7: a stopped Docker is started and enabled (spec 26), not restarted" {
   export STUB_ACTIVE=3
+  # Stopped until an enable --now works
+  stub systemctl 'up=$(dirname "$STUB_LOG")/up
+[[ "$1" == is-active ]] && { [[ -f "$up" ]] && exit 0; exit 3; }
+[[ "$1" == enable ]] && touch "$up"
+exit 0'
   run install_registry_cert
   [ "$status" -eq 0 ]
-  called "systemctl start docker"
+  called "systemctl enable --now docker"
   ! called "systemctl restart" || false
 }
 @test "I7: a running Docker is left alone" {
@@ -78,10 +85,10 @@ teardown() {
 }
 @test "I7: a Docker that won't start stops the run" {
   export STUB_ACTIVE=3
-  stub systemctl '[[ "$1" == is-active ]] && exit 3; [[ "$1" == start ]] && exit 1; exit 0'
+  stub systemctl '[[ "$1" == is-active ]] && exit 3; [[ "$1" == enable ]] && exit 1; exit 0'
   run install_registry_cert
   [ "$status" -eq 1 ]
-  [[ "$output" == *"'systemctl start docker' failed"* ]]
+  [[ "$output" == *"Docker is installed but won't start"*"journalctl -u docker"* ]]
 }
 @test "I7: a registry that isn't <host>:<port> is refused before anything is written" {
   for r in "reg.test:5443/x" "../etc:443" "" "reg.test:https" "reg.test" ".hidden:443"; do

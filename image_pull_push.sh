@@ -654,6 +654,8 @@ install_docker() {
 start_stopped_docker() {
     command -v systemctl &> /dev/null || return 0
     systemctl is-active --quiet docker && return 0
+    # No docker.service here (a remote DOCKER_HOST, podman-docker, a snap, no systemd): nothing of ours to start
+    systemctl cat docker.service &> /dev/null || return 0
     echo "  Docker is installed but not running, starting it"
     # Docker has never started here (no network store yet), as after an older release's "reboot, then re-run", which
     # threw its daemon.json away: set up the bridge and the docker group first, as a first install does. A Docker that
@@ -821,13 +823,10 @@ install_registry_cert() {
         echo "  Certificate saved to $docker_cert, which Docker reads without a restart"
     fi
     CERT_WRITTEN=1
-    # A stopped Docker is started, as the restart this replaces did. A running one is left alone, with its containers.
-    if command -v docker &> /dev/null && command -v systemctl &> /dev/null && ! systemctl is-active --quiet docker; then
-        echo "  Docker is installed but not running, starting it"
-        if ! systemctl start docker; then
-            echo "Error: Docker is installed but not running, and 'systemctl start docker' failed."
-            exit 1
-        fi
+    # A stopped Docker is started and enabled, as the restart this replaces did, the same way as everywhere else (spec 26).
+    # A running one is left alone, with its containers.
+    if command -v docker &> /dev/null; then
+        start_stopped_docker
     fi
 }
 
